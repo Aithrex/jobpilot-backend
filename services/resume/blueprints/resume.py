@@ -29,6 +29,7 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
+from services.resume_format import normalize_preferences
 from utils.security import InputSanitizer, get_rate_limiter, get_client_ip
 from utils.db_connect import DBConnect
 from utils.datadog_metrics import dd_metric
@@ -198,6 +199,9 @@ def tailor():
         }
         if resume_id:
             payload["resume_id"] = resume_id
+        format_prefs = normalize_preferences(data.get("preferences"))
+        if format_prefs:
+            payload["preferences"] = format_prefs
         try:
             job_id = svc.create_job("tailor", payload, user_email=user_email)
             _quota_ledger.attach_job(entry_ids[0], job_id)
@@ -269,6 +273,9 @@ def tailor_with_jd():
         }
         if resume_id:
             payload["resume_id"] = resume_id
+        format_prefs = normalize_preferences(data.get("preferences"))
+        if format_prefs:
+            payload["preferences"] = format_prefs
         source_job_id = InputSanitizer.sanitize_string(
             str(data.get("source_job_id") or ""), max_length=256
         )
@@ -2649,6 +2656,43 @@ def _render_document(svc, tailored, fmt):
         from services.tailoring_assessment import check_export
         layout["export_check"], _ = check_export(file_bytes, tailored, format=fmt)
     return file_bytes, layout
+
+
+@resume_bp.route("/format", methods=["POST"])
+@jwt_required()
+def reformat_resume():
+    """Re-fit a tailored résumé to new format choices (no model call).
+
+    Body: {tailored_resume, preferences: {page_length, density, accent,
+    section_order}, jd_analysis?}. Returns {tailored_resume}. Deterministic
+    and quick (a few renders), so it answers inline rather than as a job.
+    """
+    client_ip = get_client_ip(request)
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(f"resume_format:{client_ip}", max_requests=40, window_seconds=300):
+        return jsonify({"error": "Too many format changes. Try again in a few minutes."}), 429
+    if (request.content_length or 0) > 600_000:
+        return jsonify({"error": "Resume is too large to reformat."}), 413
+
+    data = request.get_json(force=True, silent=True) or {}
+    tailored = data.get("tailored_resume")
+    if not isinstance(tailored, dict) or not isinstance(tailored.get("experience"), list):
+        return jsonify({"error": "tailored_resume is required"}), 400
+    prefs = normalize_preferences(data.get("preferences"))
+    if not prefs:
+        return jsonify({"error": "Choose a page length, spacing, accent or section order."}), 400
+    jd_analysis = data.get("jd_analysis") if isinstance(data.get("jd_analysis"), dict) else {}
+
+    try:
+        from services.resume_format import reformat
+        from services.resume_service import get_resume_service
+
+        result = reformat(tailored, prefs, jd_analysis=jd_analysis,
+                          renderer=get_resume_service().renderer)
+        return jsonify({"tailored_resume": result})
+    except Exception as e:
+        logger.error(f"Resume format error: {e}")
+        return jsonify({"error": "Could not apply that format. Please try again."}), 500
 
 
 @resume_bp.route("/layout-spec", methods=["GET"])

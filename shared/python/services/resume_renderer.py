@@ -11,6 +11,7 @@ import copy
 import io
 import logging
 import os
+import dataclasses
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Tuple
@@ -81,6 +82,12 @@ class LayoutSpec:
     # 3.77 mm at 9.4 pt → 1.137 ratio. Other tiers scale from this.
     body_lh_mm_at_ref: float = 3.77
     text_align: str = "L"  # never "J" — short resume lines river when justified
+    # Name, section headings and their rules. Black by default; see
+    # services.resume_format.ACCENTS for the user-selectable accent.
+    accent_rgb: Tuple[int, int, int] = (0, 0, 0)
+    # Smallest body size the one-page cascade may use. 9.0 = today's ladder;
+    # the "comfortable" density raises it so lines are trimmed, not shrunk.
+    min_body_pt: float = 9.0
 
     section_order: Tuple[str, ...] = (
         "summary", "experience", "projects", "skills", "education", "certifications",
@@ -333,6 +340,36 @@ class ResumeRenderer:
         self._FALLBACK_SANS = "NotoSans"
         self._FALLBACK_CJK = "NotoSansSC"
         self._loaded_fonts: set = set()
+
+    def for_preferences(self, prefs: Optional[Dict[str, Any]]) -> "ResumeRenderer":
+        """This renderer, or a cached variant whose spec carries the user's
+        format choices (density, accent). No preferences = self, unchanged."""
+        from services.resume_format import layout_overrides
+        # Variants are always derived from, and cached on, the base renderer,
+        # so asking a variant for its own preferences returns itself.
+        base = self.__dict__.get("_base") or self
+        over = layout_overrides(prefs)
+        if not over:
+            return base
+        key = tuple(sorted(over.items()))
+        cache = base.__dict__.setdefault("_variants", {})
+        variant = cache.get(key)
+        if variant is None:
+            variant = ResumeRenderer(spec=dataclasses.replace(base.spec, **over))
+            variant._base = base
+            cache[key] = variant
+        return variant
+
+    @staticmethod
+    def _section_sequence(tailored: Optional[Dict[str, Any]]) -> Tuple[str, ...]:
+        """Education first for students and recent graduates; see
+        services.resume_format.education_first."""
+        from services.resume_format import section_sequence
+        return section_sequence(tailored)
+
+    def for_resume(self, tailored: Optional[Dict[str, Any]]) -> "ResumeRenderer":
+        from services.resume_format import preferences_of
+        return self.for_preferences(preferences_of(tailored))
 
     # Compatibility aliases so augmenter / allocator / tests keep working.
     @property
@@ -800,7 +837,7 @@ class ResumeRenderer:
             height = self._measure_min(tailored, tier.body_pt, tier.lh, tier.lh_s)
             if height <= avail * max_fills[tier.body_pt]:
                 return tier.body_pt, tier.lh, tier.lh_s, height
-        t = _BASE_TIER
+        t = _BASE_TIER if _BASE_TIER.body_pt >= self.spec.min_body_pt else _body_tier(self.spec.min_body_pt)
         return t.body_pt, t.lh, t.lh_s, self._measure_min(tailored, t.body_pt, t.lh, t.lh_s)
 
     def _try_one_page_cascade(self, tailored: Dict[str, Any]
@@ -811,11 +848,16 @@ class ResumeRenderer:
         tier = FontTier(body, lh, lh_s)
         if height <= avail:
             return tier, height
+        floor = self.spec.min_body_pt - 1e-9
         for t in _TIGHT_BASE:
+            if t.body_pt < floor:
+                continue
             h = self._measure_min(tailored, t.body_pt, t.lh, t.lh_s)
             if h <= avail:
                 return t, h
         for t in (_TIER_92, _TIER_90):
+            if t.body_pt < floor:
+                continue
             h = self._measure_min(tailored, t.body_pt, t.lh, t.lh_s)
             if h <= avail:
                 return t, h
@@ -915,9 +957,13 @@ class ResumeRenderer:
         s = self.spec
         avail = s.usable_height()
         budget = avail * 2 + 0.5
-        chosen = _TWO_PAGE_FLOOR
+        floor_tier = (_TWO_PAGE_FLOOR if _TWO_PAGE_FLOOR.body_pt >= s.min_body_pt
+                      else _body_tier(s.min_body_pt))
+        chosen = floor_tier
         height = self._measure_min(tailored, chosen.body_pt, chosen.lh, chosen.lh_s)
-        for tier in (_body_tier(10.0), _body_tier(9.7), _TWO_PAGE_FLOOR):
+        ladder = [t for t in (_body_tier(10.0), _body_tier(9.7), _TWO_PAGE_FLOOR)
+                  if t.body_pt >= s.min_body_pt - 1e-9] or [floor_tier]
+        for tier in ladder:
             h = self._measure_min(tailored, tier.body_pt, tier.lh, tier.lh_s)
             chosen, height = tier, h
             if h <= budget:
@@ -1271,7 +1317,9 @@ class ResumeRenderer:
         w = pdf.w - 2 * ml
 
         self._set_font(pdf, "B", s.name_pt, name)
+        pdf.set_text_color(*s.accent_rgb)
         pdf.cell(w, s.name_cell_h, name, align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_text_color(0, 0, 0)
         pdf.ln(s.name_contact_gap_mm)
 
         contact_fields = []
@@ -1348,12 +1396,15 @@ class ResumeRenderer:
             else:
                 pdf.ln(section_gap)
             self._set_font(pdf, "B", s.section_pt, title)
+            pdf.set_text_color(*s.accent_rgb)
             pdf.cell(w, s.heading_cell_h, title.upper(), new_x="LMARGIN", new_y="NEXT")
+            pdf.set_text_color(0, 0, 0)
             pdf.ln(s.heading_rule_gap_mm)
             ry = pdf.get_y()
-            pdf.set_draw_color(0, 0, 0)
+            pdf.set_draw_color(*s.accent_rgb)
             pdf.set_line_width(s.section_hr_width)
             pdf.line(ml, ry, ml + w, ry)
+            pdf.set_draw_color(0, 0, 0)
             pdf.ln(post_header)
 
         def bullet(text: str, is_first: bool = False):
@@ -1401,209 +1452,219 @@ class ResumeRenderer:
             pdf.multi_cell(w - text_indent, lh, safe, align=align,
                            new_x="LMARGIN", new_y="NEXT")
 
-        # SUMMARY
-        summary = tailored.get("summary", "")
-        if summary:
-            section_header(s.heading("summary"))
-            safe_summary = sanitize(summary)
-            self._assert_renderable(safe_summary, "summary")
-            self._set_font(pdf, "", body_size, safe_summary)
-            lead_match = re.match(
-                r'^([^,—\-]+?)(?=\s+(?:with|who|experienced|skilled|specializing|focused|that|building|designing)\b|\s*[—,]\s*|\s+-\s+)',
-                safe_summary, flags=re.IGNORECASE,
-            )
-            lead = lead_match.group(1).strip() if lead_match else ""
-            if lead and 3 < len(lead) <= 60 and "**" not in safe_summary:
-                rest = safe_summary[len(lead):]
-                pdf.multi_cell(w, lh, f"**{lead}**{rest}", markdown=True,
-                               align=align, new_x="LMARGIN", new_y="NEXT")
-                self._reset_pdf_paint(pdf)
-            else:
-                pdf.multi_cell(w, lh, safe_summary, align=align,
-                               new_x="LMARGIN", new_y="NEXT")
+        def _pdf_summary():
+            # SUMMARY
+            summary = tailored.get("summary", "")
+            if summary:
+                section_header(s.heading("summary"))
+                safe_summary = sanitize(summary)
+                self._assert_renderable(safe_summary, "summary")
+                self._set_font(pdf, "", body_size, safe_summary)
+                lead_match = re.match(
+                    r'^([^,—\-]+?)(?=\s+(?:with|who|experienced|skilled|specializing|focused|that|building|designing)\b|\s*[—,]\s*|\s+-\s+)',
+                    safe_summary, flags=re.IGNORECASE,
+                )
+                lead = lead_match.group(1).strip() if lead_match else ""
+                if lead and 3 < len(lead) <= 60 and "**" not in safe_summary:
+                    rest = safe_summary[len(lead):]
+                    pdf.multi_cell(w, lh, f"**{lead}**{rest}", markdown=True,
+                                   align=align, new_x="LMARGIN", new_y="NEXT")
+                    self._reset_pdf_paint(pdf)
+                else:
+                    pdf.multi_cell(w, lh, safe_summary, align=align,
+                                   new_x="LMARGIN", new_y="NEXT")
 
-        # EXPERIENCE
-        experience = tailored.get("experience") or []
-        if experience:
-            first_exp = experience[0]
-            first_need = s.entry_row_h + (
-                header_gap + job_title_h if (first_exp.get("title") or "").strip() else 0.0
-            )
-            if first_exp.get("bullets"):
-                first_need += pre_bullet_gap + lh
-            section_header(s.heading("experience"), keep_with_mm=first_need)
-            prev_exp: Optional[Dict[str, Any]] = None
-            for i, exp in enumerate(experience):
-                grouped = self._grouped_with_previous(prev_exp, exp)
-                company = sanitize(exp.get("company", ""))
-                location = sanitize(exp.get("location", ""))
-                dates = sanitize(exp.get("dates", ""))
-                title = sanitize(exp.get("title", ""))
-                role_type = sanitize(exp.get("type", "")).strip()
-                title_line = f"{title} · {role_type}" if title and role_type else title
-                if grouped:
-                    # Continuation role under the same employer: keep each
-                    # role's title and dates; do not reprint the company.
-                    if title_line:
+        def _pdf_experience():
+            # EXPERIENCE
+            experience = tailored.get("experience") or []
+            if experience:
+                first_exp = experience[0]
+                first_need = s.entry_row_h + (
+                    header_gap + job_title_h if (first_exp.get("title") or "").strip() else 0.0
+                )
+                if first_exp.get("bullets"):
+                    first_need += pre_bullet_gap + lh
+                section_header(s.heading("experience"), keep_with_mm=first_need)
+                prev_exp: Optional[Dict[str, Any]] = None
+                for i, exp in enumerate(experience):
+                    grouped = self._grouped_with_previous(prev_exp, exp)
+                    company = sanitize(exp.get("company", ""))
+                    location = sanitize(exp.get("location", ""))
+                    dates = sanitize(exp.get("dates", ""))
+                    title = sanitize(exp.get("title", ""))
+                    role_type = sanitize(exp.get("type", "")).strip()
+                    title_line = f"{title} · {role_type}" if title and role_type else title
+                    if grouped:
+                        # Continuation role under the same employer: keep each
+                        # role's title and dates; do not reprint the company.
+                        if title_line:
+                            self._draw_split_row(
+                                pdf, title_line, dates,
+                                left_size=body_size, right_size=body_size,
+                                left_style="I",
+                                row_h=job_title_h, w=w, ml=ml,
+                            )
+                        elif dates:
+                            self._draw_split_row(
+                                pdf, "", dates,
+                                left_size=body_size, right_size=body_size, left_style="",
+                                row_h=s.entry_row_h, w=w, ml=ml,
+                            )
+                    else:
+                        company_line = f"{company}, {location}" if location else company
                         self._draw_split_row(
-                            pdf, title_line, dates,
-                            left_size=body_size, right_size=body_size,
-                            left_style="I",
-                            row_h=job_title_h, w=w, ml=ml,
-                        )
-                    elif dates:
-                        self._draw_split_row(
-                            pdf, "", dates,
-                            left_size=body_size, right_size=body_size, left_style="",
+                            pdf, company_line, dates,
+                            left_size=s.entry_pt, right_size=body_size, left_style="B",
                             row_h=s.entry_row_h, w=w, ml=ml,
                         )
-                else:
-                    company_line = f"{company}, {location}" if location else company
-                    self._draw_split_row(
-                        pdf, company_line, dates,
-                        left_size=s.entry_pt, right_size=body_size, left_style="B",
-                        row_h=s.entry_row_h, w=w, ml=ml,
-                    )
-                    if title_line:
-                        pdf.ln(header_gap)
-                        self._assert_renderable(title_line, "title")
-                        self._set_font(pdf, "I", body_size, title_line)
-                        pdf.cell(w, job_title_h, title_line, new_x="LMARGIN", new_y="NEXT")
-                exp_bullets = exp.get("bullets") or []
-                for bi, b in enumerate(exp_bullets):
-                    bullet(b, is_first=(bi == 0))
-                if i < len(experience) - 1:
-                    pdf.ln(entry_gap)
-                prev_exp = exp
+                        if title_line:
+                            pdf.ln(header_gap)
+                            self._assert_renderable(title_line, "title")
+                            self._set_font(pdf, "I", body_size, title_line)
+                            pdf.cell(w, job_title_h, title_line, new_x="LMARGIN", new_y="NEXT")
+                    exp_bullets = exp.get("bullets") or []
+                    for bi, b in enumerate(exp_bullets):
+                        bullet(b, is_first=(bi == 0))
+                    if i < len(experience) - 1:
+                        pdf.ln(entry_gap)
+                    prev_exp = exp
 
-        # PROJECTS
-        projects = tailored.get("projects") or []
-        if projects:
-            first_proj = projects[0]
-            first_need = s.entry_row_h
-            if first_proj.get("bullets"):
-                first_need += pre_bullet_gap + lh
-            section_header(s.heading("projects"), keep_with_mm=first_need)
-            for i, proj in enumerate(projects):
-                proj_name = sanitize(proj.get("name", ""))
-                proj_dates = sanitize(proj.get("dates", ""))
-                self._draw_project_row(
-                    pdf, proj, proj_name, proj_dates,
-                    body_size=body_size, line_h=job_title_h, w=w, ml=ml,
-                )
-                proj_bullets = proj.get("bullets") or []
-                for bi, b in enumerate(proj_bullets):
-                    bullet(b, is_first=(bi == 0))
-                if i < len(projects) - 1:
-                    pdf.ln(entry_gap)
-
-        # SKILLS
-        skill_rows = self._prepare_skill_rows(tailored.get("skills") or {})
-        if skill_rows:
-            skills_heading = self._skills_title(tailored)
-            lh_skill = max(min(lh_s, s.max_skill_leading), 3.45)
-            section_header(skills_heading, keep_with_mm=lh_skill)
-            for i, (category, skill_list) in enumerate(skill_rows):
-                self._draw_skill_row(
-                    pdf, category, skill_list,
-                    lh=lh_skill, w=w, ml=ml, body_size=body_size,
-                )
-                if i < len(skill_rows) - 1:
-                    pdf.ln(skill_gap)
-            self._reset_pdf_paint(pdf)
-
-        # EDUCATION
-        education = tailored.get("education") or []
-        if education:
-            seen_edu = set()
-            deduped = []
-            for edu in education:
-                inst = sanitize(edu.get("institution", "")).strip()
-                degree = sanitize(edu.get("degree", "")).strip()
-                if not inst and not degree:
-                    continue
-                key = (inst.lower(), degree.lower())
-                if key in seen_edu:
-                    continue
-                seen_edu.add(key)
-                deduped.append(edu)
-            if deduped:
-                first = deduped[0]
+        def _pdf_projects():
+            # PROJECTS
+            projects = tailored.get("projects") or []
+            if projects:
+                first_proj = projects[0]
                 first_need = s.entry_row_h
-                if sanitize(first.get("degree", "")).strip():
-                    first_need += header_gap + lh
-                if sanitize(first.get("coursework", "")).strip():
-                    first_need += lh_s
-                # Keep EDUCATION heading with its first school line — never
-                # draw the heading then page-break before the entry.
-                section_header(s.heading("education"), keep_with_mm=first_need)
-                for ei, edu in enumerate(deduped):
-                    if ei > 0:
-                        pdf.ln(edu_entry_gap)
-                    inst = sanitize(edu.get("institution", ""))
-                    location = sanitize(edu.get("location", ""))
-                    degree = sanitize(edu.get("degree", ""))
-                    dates = sanitize(edu.get("dates", ""))
-                    gpa = sanitize(edu.get("gpa", ""))
-                    coursework = sanitize(edu.get("coursework", "")).strip()
-                    if degree and re.search(
-                        r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4}\b",
-                        degree, re.IGNORECASE,
-                    ):
-                        cleaned = re.sub(
-                            r"\s*\|?\s*\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*"
-                            r"\s+\d{4}\b",
-                            "", degree, flags=re.IGNORECASE,
-                        ).strip().rstrip("|").strip()
-                        if cleaned:
-                            degree = cleaned
-                    if inst and location and location.lower() in inst.lower():
-                        loc_part = ""
-                    else:
-                        loc_part = location
-                    left_bits = [p for p in [inst, loc_part] if p]
-                    if gpa:
-                        left_bits.append(f"GPA: {gpa}")
-                    left_text = " | ".join(left_bits)
-                    # Subsequent entries: keep school line + degree together,
-                    # but never orphan from a heading already drawn.
-                    if ei > 0 and not measure_only:
-                        need = s.entry_row_h
-                        if degree:
-                            need += header_gap + lh
-                        if coursework:
-                            need += lh_s
-                        if (pdf.page_break_trigger - pdf.get_y()) < (need + 1.0):
-                            pdf.add_page()
-                            pdf.set_y(mt)
-                    self._draw_split_row(
-                        pdf, left_text, dates,
-                        left_size=s.entry_pt, right_size=body_size, left_style="B",
-                        row_h=s.entry_row_h, w=w, ml=ml,
+                if first_proj.get("bullets"):
+                    first_need += pre_bullet_gap + lh
+                section_header(s.heading("projects"), keep_with_mm=first_need)
+                for i, proj in enumerate(projects):
+                    proj_name = sanitize(proj.get("name", ""))
+                    proj_dates = sanitize(proj.get("dates", ""))
+                    self._draw_project_row(
+                        pdf, proj, proj_name, proj_dates,
+                        body_size=body_size, line_h=job_title_h, w=w, ml=ml,
                     )
-                    if degree:
-                        pdf.ln(header_gap)
-                        self._assert_renderable(degree, "degree")
-                        self._set_font(pdf, "I", body_size, degree)
-                        pdf.multi_cell(w, lh, degree, align=align,
-                                       new_x="LMARGIN", new_y="NEXT")
-                    if coursework:
-                        self._set_font(pdf, "", body_size, coursework)
-                        pdf.multi_cell(w, lh_s, coursework, align=align,
-                                       new_x="LMARGIN", new_y="NEXT")
+                    proj_bullets = proj.get("bullets") or []
+                    for bi, b in enumerate(proj_bullets):
+                        bullet(b, is_first=(bi == 0))
+                    if i < len(projects) - 1:
+                        pdf.ln(entry_gap)
 
-        # CERTIFICATIONS — last, never trimmed
-        certs = [sanitize(c).strip() for c in (tailored.get("certifications") or []) if str(c).strip()]
-        if certs:
-            section_header(s.heading("certifications"), keep_with_mm=lh_s)
-            joined = ", ".join(certs)
-            self._assert_renderable(joined, "certifications")
-            self._set_font(pdf, "", body_size, joined)
-            if pdf.get_string_width(joined) <= w:
-                pdf.multi_cell(w, lh_s, joined, align=align, new_x="LMARGIN", new_y="NEXT")
-            else:
-                for c in certs:
-                    pdf.multi_cell(w, lh_s, c, align=align, new_x="LMARGIN", new_y="NEXT")
+        def _pdf_skills():
+            # SKILLS
+            skill_rows = self._prepare_skill_rows(tailored.get("skills") or {})
+            if skill_rows:
+                skills_heading = self._skills_title(tailored)
+                lh_skill = max(min(lh_s, s.max_skill_leading), 3.45)
+                section_header(skills_heading, keep_with_mm=lh_skill)
+                for i, (category, skill_list) in enumerate(skill_rows):
+                    self._draw_skill_row(
+                        pdf, category, skill_list,
+                        lh=lh_skill, w=w, ml=ml, body_size=body_size,
+                    )
+                    if i < len(skill_rows) - 1:
+                        pdf.ln(skill_gap)
+                self._reset_pdf_paint(pdf)
+
+        def _pdf_education():
+            # EDUCATION
+            education = tailored.get("education") or []
+            if education:
+                seen_edu = set()
+                deduped = []
+                for edu in education:
+                    inst = sanitize(edu.get("institution", "")).strip()
+                    degree = sanitize(edu.get("degree", "")).strip()
+                    if not inst and not degree:
+                        continue
+                    key = (inst.lower(), degree.lower())
+                    if key in seen_edu:
+                        continue
+                    seen_edu.add(key)
+                    deduped.append(edu)
+                if deduped:
+                    first = deduped[0]
+                    first_need = s.entry_row_h
+                    if sanitize(first.get("degree", "")).strip():
+                        first_need += header_gap + lh
+                    if sanitize(first.get("coursework", "")).strip():
+                        first_need += lh_s
+                    # Keep EDUCATION heading with its first school line — never
+                    # draw the heading then page-break before the entry.
+                    section_header(s.heading("education"), keep_with_mm=first_need)
+                    for ei, edu in enumerate(deduped):
+                        if ei > 0:
+                            pdf.ln(edu_entry_gap)
+                        inst = sanitize(edu.get("institution", ""))
+                        location = sanitize(edu.get("location", ""))
+                        degree = sanitize(edu.get("degree", ""))
+                        dates = sanitize(edu.get("dates", ""))
+                        gpa = sanitize(edu.get("gpa", ""))
+                        coursework = sanitize(edu.get("coursework", "")).strip()
+                        if degree and re.search(
+                            r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4}\b",
+                            degree, re.IGNORECASE,
+                        ):
+                            cleaned = re.sub(
+                                r"\s*\|?\s*\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*"
+                                r"\s+\d{4}\b",
+                                "", degree, flags=re.IGNORECASE,
+                            ).strip().rstrip("|").strip()
+                            if cleaned:
+                                degree = cleaned
+                        if inst and location and location.lower() in inst.lower():
+                            loc_part = ""
+                        else:
+                            loc_part = location
+                        left_bits = [p for p in [inst, loc_part] if p]
+                        if gpa:
+                            left_bits.append(f"GPA: {gpa}")
+                        left_text = " | ".join(left_bits)
+                        # Subsequent entries: keep school line + degree together,
+                        # but never orphan from a heading already drawn.
+                        if ei > 0 and not measure_only:
+                            need = s.entry_row_h
+                            if degree:
+                                need += header_gap + lh
+                            if coursework:
+                                need += lh_s
+                            if (pdf.page_break_trigger - pdf.get_y()) < (need + 1.0):
+                                pdf.add_page()
+                                pdf.set_y(mt)
+                        self._draw_split_row(
+                            pdf, left_text, dates,
+                            left_size=s.entry_pt, right_size=body_size, left_style="B",
+                            row_h=s.entry_row_h, w=w, ml=ml,
+                        )
+                        if degree:
+                            pdf.ln(header_gap)
+                            self._assert_renderable(degree, "degree")
+                            self._set_font(pdf, "I", body_size, degree)
+                            pdf.multi_cell(w, lh, degree, align=align,
+                                           new_x="LMARGIN", new_y="NEXT")
+                        if coursework:
+                            self._set_font(pdf, "", body_size, coursework)
+                            pdf.multi_cell(w, lh_s, coursework, align=align,
+                                           new_x="LMARGIN", new_y="NEXT")
+
+        def _pdf_certifications():
+            # CERTIFICATIONS — last, never trimmed
+            certs = [sanitize(c).strip() for c in (tailored.get("certifications") or []) if str(c).strip()]
+            if certs:
+                section_header(s.heading("certifications"), keep_with_mm=lh_s)
+                joined = ", ".join(certs)
+                self._assert_renderable(joined, "certifications")
+                self._set_font(pdf, "", body_size, joined)
+                if pdf.get_string_width(joined) <= w:
+                    pdf.multi_cell(w, lh_s, joined, align=align, new_x="LMARGIN", new_y="NEXT")
+                else:
+                    for c in certs:
+                        pdf.multi_cell(w, lh_s, c, align=align, new_x="LMARGIN", new_y="NEXT")
+
+        _drawers = {"summary": _pdf_summary, "experience": _pdf_experience, "projects": _pdf_projects, "skills": _pdf_skills, "education": _pdf_education, "certifications": _pdf_certifications}
+        for _section in self._section_sequence(tailored):
+            _drawers[_section]()
 
         # Additional labeled sections — generic entry layout; never dropped here.
         for _sec, heading, entries, raw in self._iter_additional_sections(tailored):
@@ -1655,6 +1716,9 @@ class ResumeRenderer:
 
     def generate_pdf(self, tailored: Dict[str, Any]) -> Tuple[bytes, PageResolution]:
         """Render a PDF. Never clips. Returns (bytes, PageResolution)."""
+        variant = self.for_resume(tailored)
+        if variant is not self:
+            return variant.generate_pdf(tailored)
         working, resolution = self._compute_pdf_layout(tailored)
         pdf_bytes, height, resolution = self._render_and_reconcile_pages(
             working, resolution,
@@ -1991,6 +2055,8 @@ class ResumeRenderer:
             p.paragraph_format.space_after = Pt(after)
             p.paragraph_format.line_spacing = line_spacing if spacing is None else spacing
 
+        accent_hex = "%02X%02X%02X" % tuple(s.accent_rgb)
+
         def add_bottom_border(p, size="6", space="0"):
             pPr = p._p.get_or_add_pPr()
             pBdr = OxmlElement("w:pBdr")
@@ -1998,7 +2064,7 @@ class ResumeRenderer:
             bottom.set(qn("w:val"), "single")
             bottom.set(qn("w:sz"), size)
             bottom.set(qn("w:space"), space)
-            bottom.set(qn("w:color"), "000000")
+            bottom.set(qn("w:color"), accent_hex)
             pBdr.append(bottom)
             pPr.append(pBdr)
 
@@ -2009,7 +2075,7 @@ class ResumeRenderer:
             nonlocal first_section
             p = doc.add_paragraph()
             run = p.add_run(title.upper())
-            set_run_font(run, s.section_pt, bold=True)
+            set_run_font(run, s.section_pt, bold=True, color=accent_hex)
             before = 0.0 if first_section else section_gap
             first_section = False
             after_pt = (s.min_post_header if post_header is None else post_header) * 72 / 25.4
@@ -2056,7 +2122,7 @@ class ResumeRenderer:
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = p.add_run(name)
-        set_run_font(run, s.name_pt, bold=True)
+        set_run_font(run, s.name_pt, bold=True, color=accent_hex)
         tight(p, before=0, after=s.name_contact_gap_mm * 72 / 25.4)
 
         contact_fields = []
@@ -2076,140 +2142,150 @@ class ResumeRenderer:
                     set_run_font(sep, s.contact_pt)
             tight(p, before=0, after=s.contact_section_gap_mm * 72 / 25.4)
 
-        summary = tailored.get("summary", "")
-        if summary:
-            add_section_header(s.heading("summary"))
-            p = doc.add_paragraph()
-            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            run = p.add_run(summary)
-            set_run_font(run, body_size)
-            tight(p, before=0, after=0)
-
-        experience = tailored.get("experience") or []
-        if experience:
-            add_section_header(s.heading("experience"))
-            prev_exp: Optional[Dict[str, Any]] = None
-            for i, exp in enumerate(experience):
-                grouped = self._grouped_with_previous(prev_exp, exp)
-                company = exp.get("company", "")
-                location = exp.get("location", "")
-                dates = exp.get("dates", "")
-                title = exp.get("title", "")
-                role_type = (exp.get("type") or "").strip()
-                title_line = f"{title} · {role_type}" if title and role_type else title
-                if grouped:
-                    if title_line:
-                        header_line(title_line, dates)
-                    elif dates:
-                        header_line("", dates)
-                else:
-                    company_line = f"{company}, {location}" if location else company
-                    header_line(company_line, dates)
-                    if title_line:
-                        p2 = doc.add_paragraph()
-                        p2.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                        r = p2.add_run(title_line)
-                        set_run_font(r, body_size, italic=True)
-                        tight(p2, before=header_gap * 72 / 25.4, after=0)
-                for bi, b in enumerate(exp.get("bullets") or []):
-                    add_bullet(b, is_first=(bi == 0))
-                if i < len(experience) - 1:
-                    spacer = doc.add_paragraph()
-                    tight(spacer, before=entry_gap, after=0)
-                prev_exp = exp
-
-        projects = tailored.get("projects") or []
-        if projects:
-            add_section_header(s.heading("projects"))
-            for i, proj in enumerate(projects):
-                from services.project_links import link_of
-                proj_link = link_of(proj)
-                header_line(proj.get("name", ""), proj.get("dates", ""),
-                            link_text=proj_link[0] if proj_link else "")
-                for bi, b in enumerate(proj.get("bullets") or []):
-                    add_bullet(b, is_first=(bi == 0))
-                if i < len(projects) - 1:
-                    spacer = doc.add_paragraph()
-                    tight(spacer, before=entry_gap, after=0)
-
-        skill_rows = self._prepare_skill_rows(tailored.get("skills") or {})
-        if skill_rows:
-            add_section_header(self._skills_title(tailored))
-            for category, skill_list in skill_rows:
+        def _docx_summary():
+            summary = tailored.get("summary", "")
+            if summary:
+                add_section_header(s.heading("summary"))
                 p = doc.add_paragraph()
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                r_cat = p.add_run(f"{category}: ")
-                set_run_font(r_cat, body_size, bold=True)
-                sk = ", ".join(skill_list) if isinstance(skill_list, list) else str(skill_list)
-                r_sk = p.add_run(sk)
-                set_run_font(r_sk, body_size)
-                tight(p, before=skill_gap * 72 / 25.4, after=0,
-                      spacing=min(line_spacing, s.docx_max_skill_spacing))
+                run = p.add_run(summary)
+                set_run_font(run, body_size)
+                tight(p, before=0, after=0)
 
-        education = tailored.get("education") or []
-        if education:
-            seen = set()
-            deduped = []
-            for edu in education:
-                inst = (edu.get("institution", "") or "").strip()
-                degree = (edu.get("degree", "") or "").strip()
-                if not inst and not degree:
-                    continue
-                key = (inst.lower(), degree.lower())
-                if key in seen:
-                    continue
-                seen.add(key)
-                deduped.append(edu)
-            if deduped:
-                add_section_header(s.heading("education"), keep_with_next=True)
-                for edu_i, edu in enumerate(deduped):
-                    inst = edu.get("institution", "") or ""
-                    location = edu.get("location", "") or ""
-                    degree = edu.get("degree", "") or ""
-                    dates = edu.get("dates", "") or ""
-                    gpa = edu.get("gpa", "") or ""
-                    if degree and re.search(
-                        r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4}\b",
-                        degree, re.IGNORECASE,
-                    ):
-                        cleaned = re.sub(
-                            r"\s*\|?\s*\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*"
-                            r"\s+\d{4}\b", "", degree, flags=re.IGNORECASE,
-                        ).strip().rstrip("|").strip()
-                        if cleaned:
-                            degree = cleaned
-                    if inst and location and location.lower() in inst.lower():
-                        loc_part = ""
+        def _docx_experience():
+            experience = tailored.get("experience") or []
+            if experience:
+                add_section_header(s.heading("experience"))
+                prev_exp: Optional[Dict[str, Any]] = None
+                for i, exp in enumerate(experience):
+                    grouped = self._grouped_with_previous(prev_exp, exp)
+                    company = exp.get("company", "")
+                    location = exp.get("location", "")
+                    dates = exp.get("dates", "")
+                    title = exp.get("title", "")
+                    role_type = (exp.get("type") or "").strip()
+                    title_line = f"{title} · {role_type}" if title and role_type else title
+                    if grouped:
+                        if title_line:
+                            header_line(title_line, dates)
+                        elif dates:
+                            header_line("", dates)
                     else:
-                        loc_part = location
-                    left_bits = [x for x in [inst, loc_part] if x]
-                    if gpa:
-                        left_bits.append(f"GPA: {gpa}")
-                    school_p = header_line(" | ".join(left_bits), dates)
-                    # Keep school line with degree so Education does not split mid-entry.
-                    if degree and edu_i == 0:
-                        school_p.paragraph_format.keep_with_next = True
-                    if degree:
-                        p = doc.add_paragraph()
-                        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                        r = p.add_run(degree)
-                        set_run_font(r, body_size, italic=True)
-                        tight(p, before=header_gap * 72 / 25.4, after=0)
-                    coursework = (edu.get("coursework") or "").strip()
-                    if coursework:
-                        p = doc.add_paragraph()
-                        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                        r = p.add_run(coursework)
-                        set_run_font(r, body_size)
-                        tight(p, before=0, after=0)
+                        company_line = f"{company}, {location}" if location else company
+                        header_line(company_line, dates)
+                        if title_line:
+                            p2 = doc.add_paragraph()
+                            p2.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                            r = p2.add_run(title_line)
+                            set_run_font(r, body_size, italic=True)
+                            tight(p2, before=header_gap * 72 / 25.4, after=0)
+                    for bi, b in enumerate(exp.get("bullets") or []):
+                        add_bullet(b, is_first=(bi == 0))
+                    if i < len(experience) - 1:
+                        spacer = doc.add_paragraph()
+                        tight(spacer, before=entry_gap, after=0)
+                    prev_exp = exp
 
-        certs = [str(c).strip() for c in (tailored.get("certifications") or []) if str(c).strip()]
-        if certs:
-            add_section_header(s.heading("certifications"))
-            p = doc.add_paragraph()
-            r = p.add_run(", ".join(certs))
-            set_run_font(r, body_size)
-            tight(p, before=0, after=0)
+        def _docx_projects():
+            projects = tailored.get("projects") or []
+            if projects:
+                add_section_header(s.heading("projects"))
+                for i, proj in enumerate(projects):
+                    from services.project_links import link_of
+                    proj_link = link_of(proj)
+                    header_line(proj.get("name", ""), proj.get("dates", ""),
+                                link_text=proj_link[0] if proj_link else "")
+                    for bi, b in enumerate(proj.get("bullets") or []):
+                        add_bullet(b, is_first=(bi == 0))
+                    if i < len(projects) - 1:
+                        spacer = doc.add_paragraph()
+                        tight(spacer, before=entry_gap, after=0)
+
+        def _docx_skills():
+            skill_rows = self._prepare_skill_rows(tailored.get("skills") or {})
+            if skill_rows:
+                add_section_header(self._skills_title(tailored))
+                for category, skill_list in skill_rows:
+                    p = doc.add_paragraph()
+                    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                    r_cat = p.add_run(f"{category}: ")
+                    set_run_font(r_cat, body_size, bold=True)
+                    sk = ", ".join(skill_list) if isinstance(skill_list, list) else str(skill_list)
+                    r_sk = p.add_run(sk)
+                    set_run_font(r_sk, body_size)
+                    tight(p, before=skill_gap * 72 / 25.4, after=0,
+                          spacing=min(line_spacing, s.docx_max_skill_spacing))
+
+        def _docx_education():
+            education = tailored.get("education") or []
+            if education:
+                seen = set()
+                deduped = []
+                for edu in education:
+                    inst = (edu.get("institution", "") or "").strip()
+                    degree = (edu.get("degree", "") or "").strip()
+                    if not inst and not degree:
+                        continue
+                    key = (inst.lower(), degree.lower())
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    deduped.append(edu)
+                if deduped:
+                    add_section_header(s.heading("education"), keep_with_next=True)
+                    for edu_i, edu in enumerate(deduped):
+                        inst = edu.get("institution", "") or ""
+                        location = edu.get("location", "") or ""
+                        degree = edu.get("degree", "") or ""
+                        dates = edu.get("dates", "") or ""
+                        gpa = edu.get("gpa", "") or ""
+                        if degree and re.search(
+                            r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4}\b",
+                            degree, re.IGNORECASE,
+                        ):
+                            cleaned = re.sub(
+                                r"\s*\|?\s*\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*"
+                                r"\s+\d{4}\b", "", degree, flags=re.IGNORECASE,
+                            ).strip().rstrip("|").strip()
+                            if cleaned:
+                                degree = cleaned
+                        if inst and location and location.lower() in inst.lower():
+                            loc_part = ""
+                        else:
+                            loc_part = location
+                        left_bits = [x for x in [inst, loc_part] if x]
+                        if gpa:
+                            left_bits.append(f"GPA: {gpa}")
+                        school_p = header_line(" | ".join(left_bits), dates)
+                        # Keep school line with degree so Education does not split mid-entry.
+                        if degree and edu_i == 0:
+                            school_p.paragraph_format.keep_with_next = True
+                        if degree:
+                            p = doc.add_paragraph()
+                            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                            r = p.add_run(degree)
+                            set_run_font(r, body_size, italic=True)
+                            tight(p, before=header_gap * 72 / 25.4, after=0)
+                        coursework = (edu.get("coursework") or "").strip()
+                        if coursework:
+                            p = doc.add_paragraph()
+                            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                            r = p.add_run(coursework)
+                            set_run_font(r, body_size)
+                            tight(p, before=0, after=0)
+
+        def _docx_certifications():
+            certs = [str(c).strip() for c in (tailored.get("certifications") or []) if str(c).strip()]
+            if certs:
+                add_section_header(s.heading("certifications"))
+                p = doc.add_paragraph()
+                r = p.add_run(", ".join(certs))
+                set_run_font(r, body_size)
+                tight(p, before=0, after=0)
+
+        _docx_drawers = {"summary": _docx_summary, "experience": _docx_experience, "projects": _docx_projects, "skills": _docx_skills, "education": _docx_education, "certifications": _docx_certifications}
+        for _section in self._section_sequence(tailored):
+            _docx_drawers[_section]()
 
         for _sec, heading, entries, raw in self._iter_additional_sections(tailored):
             add_section_header((heading or "ADDITIONAL").upper())
@@ -2247,6 +2323,9 @@ class ResumeRenderer:
 
     def generate_docx(self, tailored: Dict[str, Any]) -> bytes:
         """DOCX from the same PageResolution the PDF solver produced."""
+        variant = self.for_resume(tailored)
+        if variant is not self:
+            return variant.generate_docx(tailored)
         working, resolution = self._compute_pdf_layout(tailored)
         s = self.spec
         margin_in = resolution.gaps.margin_lr / 25.4

@@ -164,8 +164,14 @@ class ResumeTailor:
         jd_analysis: Dict[str, Any],
         fact_store: Dict[str, Any] | None = None,
         past_edits: str | None = None,
+        preferences: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """Tailor a structured resume against a JD analysis.
+
+        `preferences` (optional): the user's format choices
+        (services.resume_format: page_length, density, accent,
+        section_order). Applied before bullet allocation so a two-page
+        choice keeps two pages of the user's content.
 
         Takes structured JSON input (not raw text) to eliminate re-parsing
         and reduce hallucination risk. Runs keyword gap analysis first to
@@ -183,10 +189,15 @@ class ResumeTailor:
           3. If hallucinated experience detected: one correction retry
         """
         from services.tailoring_policy import enabled
+        from services.resume_format import apply_preferences, normalize_preferences
+        format_prefs = normalize_preferences(preferences)
         if enabled():
             from services.tailoring_pipeline import run
-            return run(structured_resume, jd_analysis, fact_store=fact_store,
-                       past_edits=past_edits or "")
+            return apply_preferences(
+                run(structured_resume, jd_analysis, fact_store=fact_store,
+                    past_edits=past_edits or ""),
+                format_prefs,
+            )
         from services.claude_client import claude_json, CLAUDE_PRO
         from services.keyword_gap_engine import KeywordGapEngine
         from services.term_registry import sanitize_jd_analysis
@@ -208,8 +219,9 @@ class ResumeTailor:
         if USE_ATS_MARKET_SIGNALS:
             keyword_context += self._build_market_signal_hint(jd_analysis)
 
-        # --- Role alignment context ---
-        role_context = self._build_role_context(structured_resume, jd_analysis)
+        # --- Role alignment context + what this kind of hiring manager reads for ---
+        role_context = (self._build_role_context(structured_resume, jd_analysis)
+                        + self._build_role_focus(jd_analysis))
 
         # --- Confirmed enrichment facts (LinkedIn/GitHub, user-verified) ---
         enrichment_block = ""
@@ -268,6 +280,7 @@ class ResumeTailor:
         target_role = (jd_analysis.get("job_title") or "").strip()
 
         def _finalize(t: Dict[str, Any]) -> Dict[str, Any]:
+            t = apply_preferences(t, format_prefs)
             t = self._restore_contact(t, structured_resume)
             headings = self._build_skill_headings(structured_resume, jd_analysis)
             base_skills = self._copy_skill_cats(
@@ -661,6 +674,11 @@ class ResumeTailor:
         # alone would reset them to the parsed original's.
         from services.project_links import carry_current_links
         carry_current_links(current_tailored, corrected)
+        # Keep the user's format choices (length, spacing, accent, order):
+        # the model output carries none, and allocation below reads them.
+        current_prefs = (current_tailored or {}).get("tailoring_preferences")
+        if isinstance(current_prefs, dict) and current_prefs:
+            corrected["tailoring_preferences"] = dict(current_prefs)
 
         # Run the SAME finalize sequence as tailor() so a regenerated résumé is
         # deterministically cleaned the same way — base-skill restore, evidenced
@@ -2319,7 +2337,7 @@ class ResumeTailor:
 
             "(E) VOICE — first-person-implied on every bullet (no 'I' pronoun):\n"
             "    - NEVER write in third-person about 'the candidate' / 'this candidate' / 'candidates should...'\n"
-            "    - Do NOT write a professional summary in this pass. Leave summary as an empty string.\n\n"
+            "\n"
 
             # ----------------------------------------------------------------
             # IMMUTABLE FIELDS
@@ -2348,9 +2366,6 @@ class ResumeTailor:
             "================================================================\n"
             "CONTENT RULES (the resume MUST physically fill ONE full A4 page with substantive text)\n"
             "================================================================\n\n"
-
-            "NUMBER RETENTION: see HARD CONSTRAINT (D) — preserve every source number; aim for >=10\n"
-            "bullets carrying a metric.\n\n"
 
             "TERMINAL PUNCTUATION: every bullet AND every sentence in the summary MUST end with a\n"
             "period ('.'). Do NOT end bullets with a semicolon, comma, colon, or no punctuation.\n"
@@ -2423,10 +2438,6 @@ class ResumeTailor:
             "     Office (Excel, PowerPoint, Access)'. List at most 4 sub-services, JD-relevant first. A\n"
             "     standalone tool that merely RUNS on a platform (e.g. Terraform, Databricks, Kubernetes)\n"
             "     stays its own entry.\n"
-            "   - ACRONYM PAIRING — for the 1-3 MOST JD-critical skills that have a well-known acronym,\n"
-            "     write the pair once — 'Search Engine Optimization (SEO)', 'Amazon Web Services (AWS)' —\n"
-            "     and use the short form everywhere else. ATS engines match literally; the pair covers\n"
-            "     both phrasings.\n"
             "   - NEVER emit a 'Soft Skills', 'Other', 'Miscellaneous', or 'Concepts &\n"
             "     Methodologies' bucket you invented. Echo the candidate's headings or omit skills.\n"
             "   - Include ALL original-resume skills relevant to the JD, experience, or projects — do NOT\n"
@@ -2457,7 +2468,6 @@ class ResumeTailor:
             f"BANNED PHRASES: {banned_phrases_str}.\n\n"
             "BANNED PATTERNS:\n"
             "  - Third-person about the candidate ('the candidate', 'candidates should have...')\n"
-            "  - Writing any professional-summary prose in this pass (leave summary empty)\n"
             "  - Opening any bullet with an adjective ('Versatile...', 'Dynamic...')\n"
             "  - Opening any bullet with 'I'\n"
             "  - AI-tell numeric/dash symbols — see HARD CONSTRAINT (D.4) (no 'K+/M+/%+', '~N',\n"
@@ -2818,6 +2828,27 @@ class ResumeTailor:
             "  the candidate has zero connection to. Surface and reframe what is real.\n\n"
         )
         return "".join(parts)
+
+    @staticmethod
+    def _build_role_focus(jd_analysis: Dict[str, Any]) -> str:
+        """Short role playbook: the signals this hiring manager reads for.
+
+        The same archetypes the screener simulator grades against, so the
+        writer leads with what the reader will look for. It never adds a
+        fact: the candidate's real work is the only material.
+        """
+        try:
+            from services.screener_sim import ARCHETYPE_SIGNALS, archetype
+            arch = archetype(jd_analysis or {})
+        except Exception:
+            return ""
+        if arch == "general":
+            return ""
+        signals = "; ".join(ARCHETYPE_SIGNALS.get(arch, [])[:3])
+        return (
+            f"ROLE FOCUS ({arch.replace('_', ' ')}): this hiring manager reads for {signals}. "
+            "Lead each role with the real bullet that best shows these; never add one.\n\n"
+        )
 
     @staticmethod
     def _build_role_context(

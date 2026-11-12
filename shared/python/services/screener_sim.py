@@ -649,8 +649,13 @@ def screen(
     renderer=None,
     extra_grounding: Sequence[str] = (),
     use_llm: Optional[bool] = None,
+    prior: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Build the screener report for one tailored résumé. Read-only; fails open."""
+    """Build the screener report for one tailored résumé. Read-only; fails open.
+
+    ``prior`` (a previous report for the same résumé) supplies the evidence
+    verdicts when ``source`` is not available, e.g. after a format change.
+    """
     current_mode = mode()
     if current_mode == "off":
         return {"version": VERSION, "status": "skipped", "reason": "SCREENER_SIM=off"}
@@ -672,7 +677,15 @@ def screen(
     for crit in criteria:
         term = crit["term"]
         vis = visibility(term, tailored, pdf_text)
-        ev = evidence(term, source, extra_grounding) if source else {"state": "unknown", "line": None}
+        if source:
+            ev = evidence(term, source, extra_grounding)
+        else:
+            old = next((r for r in (prior or {}).get("criteria") or []
+                        if str(r.get("term") or "").lower() == term.lower()), None)
+            ev = ({"state": old.get("evidence") or "unknown",
+                   "line": {"text": old.get("source_line") or "", "label": old.get("where") or ""}
+                   if old.get("source_line") else None}
+                  if old else {"state": "unknown", "line": None})
         verdict = {"in_context": "meets", "listed_only": "weak"}.get(vis["state"], "not_met")
         row = {
             **crit,
