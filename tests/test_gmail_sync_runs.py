@@ -452,7 +452,10 @@ def test_scheduled_sync_picks_only_connections_that_are_due(db, monkeypatch):
     add("empty@example.test", tracked=False, last_synced_at=NOW - timedelta(days=3))
     add("gone@example.test", last_login=NOW - timedelta(days=90), last_synced_at=NOW - timedelta(days=3))
     add("running@example.test", last_synced_at=NOW - timedelta(days=3),
-        sync_run={"run_id": "live", "state": "running", "updated_at": NOW})
+        # A fresh heartbeat: NOW is fixed at import, which in a full run is
+        # long enough ago to read as a worker that died.
+        sync_run={"run_id": "live", "state": "running",
+                  "updated_at": datetime.now(timezone.utc)})
 
     result = gs.sync_due(budget_seconds=60)
 
