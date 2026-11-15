@@ -10,6 +10,15 @@ Design notes
   persisted — they are minted on demand from the refresh token.
 - Sync is incremental through a frozen date query, page cursor and completed
   watermark. The initial scan covers 60 days in bounded batches.
+- One press of Sync is a RUN: batch after batch until the window is finished,
+  in job slices that chain (`run_slice`). The worker's `gmail_sync` job
+  (`sync_due`) does the same for every connected user on a schedule and picks
+  up a run a deploy interrupted. Progress lives on the connection (`sync_run`).
+- A connection Google has stopped accepting (expired after 7 days in Testing
+  mode, revoked, or missing the read permission) is marked `needs_reconnect`;
+  `status_payload` reports it so the client offers Reconnect.
+- Every failure a user can meet is a GmailSyncError / GmailLinkError with a
+  stable code and a sentence that is safe to show.
 - Deterministic evidence runs first; inconclusive matched mail is retained
   for review with no invented status. Model calls are disabled by default.
   An operator can enable at most three FLASH attempts per batch; model-only
@@ -85,6 +94,79 @@ def _model_call_limit() -> int:
     except (TypeError, ValueError):
         return 0
 
+# A run is one press of Sync (or one scheduled pass): batch after batch until
+# the mailbox window is finished. It is cut into slices so a deploy's graceful
+# stop (5 minutes) never waits on a whole backlog; each slice starts the next.
+RUN_SLICE_SECONDS = 90.0
+# A run with no heartbeat for this long has lost its worker. It may be taken
+# over, and the per-batch lease below expires on the same clock.
+RUN_STALE_SECONDS = 480
+ACTIVITY_DAYS = 30
+# While the Google consent screen is in "Testing", Google ends every refresh
+# token 7 days after consent. See docs/ops/gmail-google-cloud.md.
+TESTING_ACCESS_DAYS = 7
+
+
+class GmailSyncError(RuntimeError):
+    """A sync failure with a stable code and a sentence written for the user.
+
+    str(error) is always safe to show: no provider body, no exception text.
+    """
+    code = "gmail_error"
+
+    def __init__(self, message: str, code: Optional[str] = None):
+        super().__init__(message)
+        if code:
+            self.code = code
+
+
+class GmailReconnectRequired(GmailSyncError):
+    """Google no longer accepts the saved access. Only a new consent fixes it."""
+    code = "gmail_reconnect_required"
+    MESSAGES = {
+        "expired_or_revoked": ("Google ended this Gmail connection, so Aspirely can no longer read "
+                               "your application emails. Reconnect Gmail to continue."),
+        "permission_missing": ("Aspirely was not given permission to read Gmail. Reconnect Gmail and "
+                               "tick the box that lets Aspirely view your email messages."),
+    }
+
+    def __init__(self, reason: str = "expired_or_revoked"):
+        self.reason = reason if reason in self.MESSAGES else "expired_or_revoked"
+        super().__init__(self.MESSAGES[self.reason])
+
+
+class GmailLinkError(RuntimeError):
+    """A failed connect attempt. `code` is stable; str(error) is safe to show."""
+    MESSAGES = {
+        "state_invalid": ("This Google sign-in link has expired or was already used. "
+                          "Start again from the tracker."),
+        "code_rejected": ("Google did not accept this sign-in, usually because it took longer than "
+                          "10 minutes or the page was reloaded. Connect Gmail again."),
+        "permission_missing": ("Gmail was not connected because the box that lets Aspirely view your "
+                               "email messages was not ticked on Google's screen. Connect again and tick it."),
+        "no_refresh_token": ("Google did not grant ongoing access. Connect Gmail again and approve "
+                             "the request on Google's screen."),
+        "gmail_unavailable": "Gmail connection is not available right now. Try again later.",
+    }
+
+    def __init__(self, code: str):
+        self.code = code if code in self.MESSAGES else "gmail_unavailable"
+        self.http_status = 503 if self.code == "gmail_unavailable" else 400
+        super().__init__(self.MESSAGES[self.code])
+
+
+class GmailUndoError(RuntimeError):
+    MESSAGES = {
+        "not_undoable": "This update cannot be undone here. Change the status on the application instead.",
+        "status_changed": ("This application's status was changed again after Gmail updated it, "
+                           "so there is nothing to undo."),
+    }
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(self.MESSAGES[code])
+
+
 # Connection age beyond which we ignore older messages on the very first sync.
 # 60d covers the typical "applied → first-round → final-round → outcome" arc
 # so users see status backfill even on records they applied to weeks ago.
@@ -129,8 +211,40 @@ def _fernet():
 
 
 def gmail_configured() -> bool:
-    """True if the deployment has the credentials needed to run the OAuth flow."""
-    return bool(_client_id() and _client_secret() and _redirect_uri())
+    """True if the deployment can run the OAuth flow AND keep its result.
+
+    The token encryption key is part of that: without it Connect appeared,
+    the user consented at Google, and the callback then failed.
+    """
+    return bool(_client_id() and _client_secret() and _redirect_uri()
+                and _get_config_value("GMAIL_TOKEN_ENCRYPTION_KEY", ""))
+
+
+def consent_mode() -> str:
+    """`testing` until the owner has published the Google consent screen.
+
+    Google cannot be asked which it is, so the deployment says so with
+    GOOGLE_OAUTH_CONSENT_MODE=production. Until then users are told the truth:
+    Google ends each connection after 7 days.
+    """
+    raw = (_get_config_value("GOOGLE_OAUTH_CONSENT_MODE", "") or "").strip().lower()
+    return "production" if raw == "production" else "testing"
+
+
+def _config_int(key: str, default: int, low: int, high: int) -> int:
+    try:
+        return max(low, min(high, int(_get_config_value(key, str(default)))))
+    except (TypeError, ValueError):
+        return default
+
+
+def auto_sync_enabled() -> bool:
+    raw = (_get_config_value("GMAIL_AUTO_SYNC_ENABLED", "") or "").strip().lower()
+    return raw not in _FLAG_FALSE and gmail_oauth_enabled() and gmail_configured()
+
+
+def auto_sync_interval_hours() -> int:
+    return _config_int("GMAIL_AUTO_SYNC_HOURS", 6, 1, 72)
 
 
 _FLAG_TRUE = {"1", "true", "yes", "on"}
@@ -172,6 +286,25 @@ def _oauth_states():
     return DBConnect().get_db().gmail_oauth_states
 
 
+_INDEXES_READY = False
+
+
+def _ensure_indexes() -> None:
+    """Idempotent, once per process, never fatal. Abandoned consent attempts
+    used to stay in gmail_oauth_states for ever; the TTL removes them."""
+    global _INDEXES_READY
+    if _INDEXES_READY:
+        return
+    _INDEXES_READY = True
+    try:
+        _oauth_states().create_index("expires_at", expireAfterSeconds=0, name="ttl_expires")
+        _oauth_states().create_index("state", unique=True, name="state_unique")
+        _suggestions().create_index([("user_email", 1), ("auto_applied", 1), ("applied_at", -1)],
+                                    name="user_auto_applied_at")
+    except Exception as e:  # pragma: no cover - an index must never block a connect
+        logger.warning("gmail index setup skipped: %s", type(e).__name__)
+
+
 # ---------------------------------------------------------------------------
 # OAuth flow
 # ---------------------------------------------------------------------------
@@ -182,6 +315,7 @@ def build_auth_url(user_email: str) -> str:
     State is stored server-side so the callback can validate it without
     trusting the client. State auto-expires after 10 minutes.
     """
+    _ensure_indexes()
     state = secrets.token_urlsafe(24)
     _oauth_states().insert_one({
         "state": state,
@@ -228,9 +362,21 @@ def exchange_code_for_tokens(code: str) -> Dict[str, Any]:
         timeout=15,
     )
     if resp.status_code != 200:
-        logger.warning("Google token exchange failed: %s %s", resp.status_code, resp.text[:300])
-        raise RuntimeError("Failed to exchange Google authorization code")
+        reason = _oauth_error(resp)
+        logger.warning("Google token exchange failed: status=%s error=%s", resp.status_code, reason)
+        # invalid_grant = the code expired, was reused, or belongs to another
+        # redirect URI. Anything else is our configuration or Google's outage.
+        raise GmailLinkError("code_rejected" if reason == "invalid_grant" else "gmail_unavailable")
     return resp.json()
+
+
+def _oauth_error(resp) -> str:
+    """Google's OAuth error NAME only (invalid_grant ...). Never the body."""
+    try:
+        value = resp.json().get("error")
+    except Exception:
+        return "unknown"
+    return value if isinstance(value, str) and re.fullmatch(r"[a-z_]{1,40}", value) else "unknown"
 
 
 def refresh_access_token(refresh_token: str) -> str:
@@ -245,9 +391,23 @@ def refresh_access_token(refresh_token: str) -> str:
         timeout=15,
     )
     if resp.status_code != 200:
-        logger.warning("Google refresh failed: %s %s", resp.status_code, resp.text[:300])
-        raise RuntimeError("Failed to refresh Gmail access token")
-    return resp.json().get("access_token")
+        reason = _oauth_error(resp)
+        logger.warning("Google refresh failed: status=%s error=%s", resp.status_code, reason)
+        if reason == "invalid_grant":
+            # Expired (7 days in Testing mode, 6 months unused), revoked by the
+            # user in their Google account, or ended by a password change.
+            raise GmailReconnectRequired("expired_or_revoked")
+        if reason in {"invalid_client", "unauthorized_client"}:
+            raise GmailSyncError("Gmail sync is not available right now. This is a problem on "
+                                 "Aspirely's side, and your connection has not been changed.",
+                                 "gmail_unavailable")
+        raise GmailSyncError("Google could not confirm your Gmail connection just now. "
+                             "Try again in a few minutes.", "gmail_error")
+    access = resp.json().get("access_token")
+    if not access:
+        raise GmailSyncError("Google could not confirm your Gmail connection just now. "
+                             "Try again in a few minutes.", "gmail_error")
+    return access
 
 
 def revoke_refresh_token(refresh_token: str) -> None:
@@ -279,26 +439,42 @@ def store_connection(user_email: str, token_payload: Dict[str, Any]) -> Dict[str
         # Google won't return a refresh_token if the user previously consented
         # and we didn't pass prompt=consent. We always pass prompt=consent, so
         # the only way to land here is a misconfiguration.
-        raise RuntimeError("Google did not return a refresh_token. Re-link from a fresh consent screen.")
+        raise GmailLinkError("no_refresh_token")
+    scopes = str(token_payload.get("scope") or "").split()
+    if scopes and GMAIL_SCOPES[0] not in scopes:
+        # Google lets the user untick each permission. Without the read scope
+        # every sync would fail, so do not store a connection that cannot work.
+        revoke_refresh_token(refresh)
+        raise GmailLinkError("permission_missing")
     access = token_payload.get("access_token") or ""
     info = _userinfo(access) if access else {}
     gmail_address = info.get("email") or ""
 
-    encrypted = _fernet().encrypt(refresh.encode("utf-8")).decode("utf-8")
+    try:
+        encrypted = _fernet().encrypt(refresh.encode("utf-8")).decode("utf-8")
+    except Exception as e:
+        logger.error("gmail token encryption unavailable: %s", type(e).__name__)
+        raise GmailLinkError("gmail_unavailable") from e
+    previous = get_connection(user_email) or {}
+    # Reconnecting the SAME mailbox keeps the finished-scan watermark, so a
+    # weekly reconnect does not re-read 60 days of mail. Another mailbox starts
+    # from nothing.
+    same_mailbox = bool(gmail_address) and previous.get("gmail_address") == gmail_address
     doc = {
         "user_email": user_email,
         "gmail_address": gmail_address,
         "refresh_token_enc": encrypted,
-        "scopes": token_payload.get("scope", "").split(),
+        "scopes": scopes,
         "linked_at": datetime.now(timezone.utc),
-        "last_synced_at": None,
+        "last_synced_at": previous.get("last_synced_at") if same_mailbox else None,
         "last_history_id": None,
     }
     _connections().update_one(
         {"user_email": user_email},
         {"$set": doc, "$unset": {key: "" for key in (
             "scan_next_page_token", "scan_query", "scan_before", "last_sync_summary",
-            "sync_lock_id", "sync_lock_until",
+            "sync_lock_id", "sync_lock_until", "needs_reconnect", "reconnect_reason",
+            "reconnect_at", "sync_run",
         )}},
         upsert=True,
     )
@@ -328,10 +504,40 @@ def disconnect(user_email: str) -> bool:
 def _get_access_token(user_email: str) -> Tuple[str, Dict[str, Any]]:
     conn = get_connection(user_email)
     if not conn:
-        raise RuntimeError("Gmail is not connected")
-    refresh = _fernet().decrypt(conn["refresh_token_enc"].encode("utf-8")).decode("utf-8")
-    access = refresh_access_token(refresh)
+        raise GmailSyncError("Gmail is not connected.", "gmail_not_connected")
+    try:
+        fernet = _fernet()
+    except Exception as e:
+        logger.error("gmail token key unavailable: %s", type(e).__name__)
+        raise GmailSyncError("Gmail sync is not available right now. This is a problem on "
+                             "Aspirely's side, and your connection has not been changed.",
+                             "gmail_unavailable") from e
+    try:
+        refresh = fernet.decrypt(str(conn.get("refresh_token_enc") or "").encode("utf-8")).decode("utf-8")
+    except Exception as e:
+        # The stored token cannot be read with the configured key. That is far
+        # more likely our key than anything the user did, and it would hit
+        # every connection at once, so it is NOT recorded as needs_reconnect:
+        # restoring the key must be enough to make every connection work again.
+        logger.error("gmail stored token unreadable with the configured key: %s", type(e).__name__)
+        raise GmailSyncError("Gmail sync is not available right now. This is a problem on "
+                             "Aspirely's side, and your connection has not been changed.",
+                             "gmail_unavailable") from e
+    try:
+        access = refresh_access_token(refresh)
+    except requests.RequestException as e:
+        raise GmailSyncError("Google could not be reached just now. Try again in a few minutes.",
+                             "gmail_error") from e
     return access, conn
+
+
+def mark_needs_reconnect(user_email: str, reason: str) -> None:
+    """Remember that only a new consent can fix this connection, so the status
+    endpoint stops saying "connected" while every sync fails."""
+    _connections().update_one(
+        {"user_email": user_email},
+        {"$set": {"needs_reconnect": True, "reconnect_reason": reason,
+                  "reconnect_at": datetime.now(timezone.utc)}})
 
 
 # ---------------------------------------------------------------------------
@@ -385,8 +591,23 @@ class GmailAPIError(RuntimeError):
             return "The app's daily Gmail quota has been reached. Try syncing again later."
         if self.status == 401:
             return "Your Gmail authorization has expired. Reconnect Gmail to continue syncing."
-        return (f"Gmail could not complete this sync (HTTP {self.status}). "
-                "Try syncing again later; your previous scan position is unchanged.")
+        return ("Gmail could not complete this sync. Try again in a few minutes; "
+                "nothing already checked is lost.")
+
+    def as_sync_error(self) -> "GmailSyncError":
+        if self.status == 401:
+            return GmailReconnectRequired("expired_or_revoked")
+        if self.reason in {"insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"}:
+            return GmailReconnectRequired("permission_missing")
+        if self.rate_limited or self.reason == "dailyLimitExceeded":
+            code = "gmail_rate_limited"
+        elif self.reason in {"accessNotConfigured", "SERVICE_DISABLED"}:
+            code = "gmail_unavailable"
+        elif self.reason == "domainPolicy":
+            code = "gmail_policy_blocked"
+        else:
+            code = "gmail_error"
+        return GmailSyncError(self.user_message(), code)
 
 
 def _retry_after_seconds(value: Optional[str]) -> Optional[float]:
@@ -417,8 +638,8 @@ class _GmailReadBudget:
         if now + delay + 1 >= self.deadline:
             if last_error:
                 raise last_error
-            raise RuntimeError("Gmail sync reached its time limit. Try syncing again; "
-                               "your previous scan position is unchanged.")
+            raise GmailSyncError("Gmail sync reached its time limit. Try syncing again; "
+                                 "your previous scan position is unchanged.", "gmail_time_limit")
         if delay:
             time.sleep(delay)
         self.next_request_at = time.monotonic() + GMAIL_REQUEST_INTERVAL_SECONDS
@@ -1707,20 +1928,29 @@ def _apply_status(user_email: str, record_id: str, status: str,
 
 
 def sync_user(user_email: str) -> Dict[str, Any]:
-    """One active bounded scan per account, including Lambda retries."""
+    """One bounded batch. One active batch per account, including retries.
+
+    Raises GmailSyncError (a RuntimeError) with a code and a user-safe message.
+    A connection Google has stopped accepting is marked `needs_reconnect`.
+    """
     if not get_connection(user_email):
-        raise RuntimeError("Gmail is not connected")
+        raise GmailSyncError("Gmail is not connected.", "gmail_not_connected")
     now = datetime.now(timezone.utc)
     lock_id = uuid.uuid4().hex
     claimed = _connections().update_one(
         {"user_email": user_email, "$or": [
             {"sync_lock_until": {"$exists": False}}, {"sync_lock_until": {"$lte": now}}]},
-        {"$set": {"sync_lock_id": lock_id, "sync_lock_until": now + timedelta(minutes=16)}},
+        {"$set": {"sync_lock_id": lock_id,
+                  "sync_lock_until": now + timedelta(seconds=RUN_STALE_SECONDS)}},
     )
     if not claimed.modified_count:
-        raise RuntimeError("A Gmail sync is already running. Try again after it finishes.")
+        raise GmailSyncError("A Gmail sync is already running. Try again after it finishes.",
+                             "gmail_sync_running")
     try:
         return _sync_user(user_email, lock_id)
+    except GmailReconnectRequired as e:
+        mark_needs_reconnect(user_email, e.reason)
+        raise
     finally:
         _connections().update_one({"user_email": user_email, "sync_lock_id": lock_id},
                                   {"$unset": {"sync_lock_id": "", "sync_lock_until": ""}})
@@ -1735,16 +1965,27 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
     if not conn:
         raise RuntimeError("Gmail is not connected")
 
+    run_id = (conn.get("sync_run") or {}).get("run_id")
     records = _records_for_user(user_email)
     index = _build_record_index(records)
     if not index:
-        return {"messages_scanned": 0, "auto_applied": 0, "suggested": 0,
-                "ignored": 0, "ambiguous_matches": 0, "has_more": False,
-                "deferred": 0, "model_calls": 0}
+        # Mail is only ever matched against tracked applications, so with none
+        # there is nothing to read. Say so, and leave the watermark alone: the
+        # first scan after an application is added still covers the full window.
+        summary = {"messages_scanned": 0, "auto_applied": 0, "suggested": 0,
+                   "ignored": 0, "ambiguous_matches": 0, "has_more": False,
+                   "deferred": 0, "model_calls": 0, "records_with_mail": 0,
+                   "tracked_applications": 0, "outcome": "no_applications"}
+        _connections().update_one({"user_email": user_email, "sync_lock_id": lock_id},
+                                  {"$set": {"last_sync_summary": summary}})
+        return summary
 
     since = conn.get("last_synced_at")
     if isinstance(since, datetime) and since.tzinfo is None:
         since = since.replace(tzinfo=timezone.utc)
+    first_scan = since is None
+    if since is not None and not conn.get("scan_query"):
+        since = _since_for_new_records(since, records)
     try:
         messages = fetch_recent_messages(user_email, since)
     except GmailAPIError as e:
@@ -1752,11 +1993,16 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
         # error and the next sync will retry the same window.
         logger.warning("[gmail-sync] fetch_failed status=%s reason=%s retryable=%s",
                        e.status, e.reason, e.retryable)
-        raise RuntimeError(e.user_message()) from e
+        raise e.as_sync_error() from e
+    except requests.RequestException as e:
+        logger.warning("[gmail-sync] fetch_failed network=%s", type(e).__name__)
+        raise GmailSyncError("Gmail could not be reached just now. Try again in a few minutes; "
+                             "nothing already checked is lost.", "gmail_error") from e
 
     def require_same_connection():
         if not _connections().find_one({"user_email": user_email, "sync_lock_id": lock_id}, {"_id": 1}):
-            raise RuntimeError("Gmail connection changed during sync. Start a new sync for the connected mailbox.")
+            raise GmailSyncError("Gmail connection changed during sync. Start a new sync for the "
+                                 "connected mailbox.", "gmail_connection_changed")
 
     require_same_connection()
 
@@ -1970,6 +2216,7 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
             "applied": False,
             "dismissed": False,
             "auto_applied": False,
+            "sync_run_id": run_id,
             "created_at": datetime.now(timezone.utc),
         }
 
@@ -2021,7 +2268,11 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
         "deferred": deferred,
         "model_calls": model_calls,
         "has_more": bool(getattr(messages, "next_page_token", None)),
+        "tracked_applications": len(index),
     }
+    if first_scan:
+        summary["window_days"] = INITIAL_LOOKBACK_DAYS
+    summary["outcome"] = _run_outcome(summary)
     state = {"last_sync_summary": summary}
     if summary["has_more"]:
         state.update({"scan_next_page_token": messages.next_page_token,
@@ -2032,8 +2283,416 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
         update = {"$set": state, "$unset": {"scan_next_page_token": "", "scan_query": "", "scan_before": ""}}
     completed = _connections().update_one({"user_email": user_email, "sync_lock_id": lock_id}, update)
     if not completed.matched_count:
-        raise RuntimeError("Gmail connection changed during sync. Start a new sync for the connected mailbox.")
+        raise GmailSyncError("Gmail connection changed during sync. Start a new sync for the "
+                             "connected mailbox.", "gmail_connection_changed")
     return summary
+
+
+def _as_utc(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str) and value:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _since_for_new_records(since: datetime, records: List[Dict[str, Any]]) -> datetime:
+    """Start earlier when an application was added after the last finished scan.
+
+    Its emails may be older than the watermark (apply on Monday, track it on
+    Wednesday), and mail before the watermark is otherwise never read again.
+    Bounded by the first-scan window. Replayed mail is safe: suggestion ids are
+    deterministic, and evidence older than a record's newest is ignored.
+    """
+    floor = datetime.now(timezone.utc) - timedelta(days=INITIAL_LOOKBACK_DAYS)
+    start = since
+    for record in records:
+        created = _as_utc(record.get("created_at"))
+        if not created or created <= since:
+            continue
+        applied = _as_utc((record.get("application") or {}).get("applied_date"))
+        start = min(start, min(created, applied or created) - timedelta(days=1))
+    return max(start, floor)
+
+
+def _run_outcome(totals: Dict[str, Any]) -> str:
+    """Why a finished scan ended the way it did, in one word for the client."""
+    if not totals.get("tracked_applications"):
+        return "no_applications"
+    if not totals.get("messages_scanned"):
+        return "no_mail"
+    if totals.get("auto_applied") or totals.get("suggested"):
+        return "updated"
+    if not totals.get("records_with_mail"):
+        return "no_matches"
+    return "up_to_date"
+
+
+# ---------------------------------------------------------------------------
+# Runs: one press of Sync, read to completion in slices
+# ---------------------------------------------------------------------------
+
+_RUN_COUNTERS = ("messages_scanned", "auto_applied", "suggested", "deferred", "ignored",
+                 "records_with_mail")
+
+
+def _run_is_live(run: Optional[Dict[str, Any]], now: Optional[datetime] = None) -> bool:
+    if not run or run.get("state") != "running":
+        return False
+    beat = _as_utc(run.get("updated_at"))
+    now = now or datetime.now(timezone.utc)
+    return bool(beat and (now - beat).total_seconds() < RUN_STALE_SECONDS)
+
+
+def start_run(user_email: str, trigger: str = "manual") -> Dict[str, Any]:
+    """Claim the account's run. Exactly one caller gets `already_running: False`."""
+    now = datetime.now(timezone.utc)
+    run = {"run_id": uuid.uuid4().hex, "trigger": trigger, "state": "running",
+           "started_at": now, "updated_at": now, "finished_at": None, "batches": 0,
+           "outcome": None, "error_code": None, "error": None,
+           **{key: 0 for key in _RUN_COUNTERS}}
+    claimed = _connections().update_one(
+        {"user_email": user_email, "$or": [
+            {"sync_run": {"$exists": False}},
+            {"sync_run.state": {"$ne": "running"}},
+            {"sync_run.updated_at": {"$lt": now - timedelta(seconds=RUN_STALE_SECONDS)}}]},
+        {"$set": {"sync_run": run}})
+    if claimed.modified_count:
+        return {"run_id": run["run_id"], "already_running": False}
+    conn = get_connection(user_email)
+    if not conn:
+        raise GmailSyncError("Gmail is not connected.", "gmail_not_connected")
+    return {"run_id": (conn.get("sync_run") or {}).get("run_id"), "already_running": True}
+
+
+def _finish_run(user_email: str, run_id: str, state: str, *, outcome: Optional[str] = None,
+                error: Optional[GmailSyncError] = None, summary: Optional[Dict[str, Any]] = None) -> None:
+    now = datetime.now(timezone.utc)
+    update: Dict[str, Any] = {"sync_run.state": state, "sync_run.updated_at": now,
+                              "sync_run.finished_at": None if state == "paused" else now,
+                              "sync_run.outcome": outcome,
+                              "sync_run.error_code": error.code if error else None,
+                              "sync_run.error": str(error) if error else None}
+    if summary is not None:
+        update["last_sync_summary"] = summary
+    _connections().update_one({"user_email": user_email, "sync_run.run_id": run_id}, {"$set": update})
+
+
+def pause_run(user_email: str, run_id: str) -> None:
+    """Mail remains and nothing is reading it. The scheduled sync continues it."""
+    _finish_run(user_email, run_id, "paused")
+
+
+def run_slice(user_email: str, run_id: Optional[str] = None, *, trigger: str = "manual",
+              budget_seconds: Optional[float] = None) -> Dict[str, Any]:
+    """Read batches for one run until the mailbox window is finished or the
+    slice's time is used. Returns the run totals plus `continue` when more mail
+    remains; the caller starts the next slice or pauses the run.
+
+    Every failure is recorded on the run and raised as GmailSyncError.
+    """
+    budget = RUN_SLICE_SECONDS if budget_seconds is None else budget_seconds
+    if not run_id:
+        claimed = start_run(user_email, trigger)
+        if claimed["already_running"]:
+            return {"run_id": claimed["run_id"], "already_running": True, "continue": False}
+        run_id = claimed["run_id"]
+    started = time.monotonic()
+    try:
+        while True:
+            conn = get_connection(user_email)
+            run = (conn or {}).get("sync_run") or {}
+            if run.get("run_id") != run_id or run.get("state") not in {"running", "paused"}:
+                # Disconnected, reconnected, or replaced by a newer run.
+                return {"run_id": run_id, "superseded": True, "continue": False}
+            batch = sync_user(user_email)
+            inc = {f"sync_run.{key}": int(batch.get(key) or 0) for key in _RUN_COUNTERS}
+            inc["sync_run.batches"] = 1
+            _connections().update_one(
+                {"user_email": user_email, "sync_run.run_id": run_id},
+                {"$inc": inc, "$set": {"sync_run.state": "running",
+                                       "sync_run.updated_at": datetime.now(timezone.utc)}})
+            totals = _run_totals(user_email, run_id, batch)
+            if not batch.get("has_more"):
+                totals["has_more"] = False
+                totals["outcome"] = _run_outcome(totals)
+                _finish_run(user_email, run_id, "completed", outcome=totals["outcome"], summary=totals)
+                return {**totals, "run_id": run_id, "continue": False}
+            if time.monotonic() - started >= budget:
+                return {**totals, "run_id": run_id, "has_more": True, "continue": True}
+    except GmailSyncError as e:
+        _finish_run(user_email, run_id, "failed", error=e)
+        raise
+    except Exception as e:
+        logger.exception("[gmail-sync] run failed user=%s: %s", user_email, type(e).__name__)
+        safe = GmailSyncError("Gmail sync stopped because of a problem on Aspirely's side. "
+                              "Try again in a few minutes; nothing already checked is lost.")
+        _finish_run(user_email, run_id, "failed", error=safe)
+        raise safe from e
+
+
+def _run_totals(user_email: str, run_id: str, batch: Dict[str, Any]) -> Dict[str, Any]:
+    run = ((get_connection(user_email) or {}).get("sync_run") or {})
+    totals = {key: int(run.get(key) or 0) for key in _RUN_COUNTERS}
+    totals["batches"] = int(run.get("batches") or 0)
+    for key in ("tracked_applications", "window_days"):
+        if key in batch:
+            totals[key] = batch[key]
+    return totals
+
+
+def sync_due(budget_seconds: float = 600.0, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """The scheduled background sync: every connection that is due, one user at
+    a time, round-robin inside the budget. Never raises for one user's failure.
+    """
+    if not auto_sync_enabled():
+        return {"enabled": False}
+    now = now or datetime.now(timezone.utc)
+    started = time.monotonic()
+    db = DBConnect().get_db()
+    stale_before = now - timedelta(hours=auto_sync_interval_hours())
+    active_since = now - timedelta(days=_config_int("GMAIL_AUTO_SYNC_ACTIVE_DAYS", 30, 1, 365))
+    due: List[Tuple[int, datetime, str]] = []
+    skipped = 0
+    for conn in _connections().find({"needs_reconnect": {"$ne": True}}, {
+            "user_email": 1, "last_synced_at": 1, "scan_next_page_token": 1, "sync_run": 1}):
+        email = conn.get("user_email")
+        last = _as_utc(conn.get("last_synced_at"))
+        unfinished = bool(conn.get("scan_next_page_token"))
+        if not email or _run_is_live(conn.get("sync_run"), now):
+            continue
+        if not (unfinished or last is None or last < stale_before):
+            continue
+        # Reading the mail of someone who has stopped using the product, or who
+        # tracks nothing to match it against, serves no feature.
+        user = db.users.find_one({"email": email}, {"last_login": 1}) or {}
+        seen = _as_utc(user.get("last_login"))
+        if (seen and seen < active_since) or not db.tailoring_records.find_one(
+                {"user_email": email}, {"_id": 1}):
+            skipped += 1
+            continue
+        due.append((0 if unfinished else 1, last or datetime.min.replace(tzinfo=timezone.utc), email))
+    due.sort()
+    result = {"enabled": True, "due": len(due), "skipped": skipped, "synced": 0,
+              "finished": 0, "failed": 0, "needs_reconnect": 0, "behind": 0}
+    pending = [(email, None) for _, _, email in due]
+    touched = set()
+    while pending:
+        carry = []
+        for email, run_id in pending:
+            # At least one user per tick, so a slow box still makes progress.
+            if touched and time.monotonic() - started > budget_seconds:
+                carry.append((email, run_id))
+                continue
+            touched.add(email)
+            try:
+                out = run_slice(email, run_id, trigger="scheduled", budget_seconds=60.0)
+            except GmailReconnectRequired:
+                result["needs_reconnect"] += 1
+                continue
+            except GmailSyncError as e:
+                result["failed"] += 1
+                logger.info("[gmail-sync] scheduled user failed code=%s", e.code)
+                continue
+            if out.get("continue"):
+                carry.append((email, out["run_id"]))
+            elif not out.get("already_running") and not out.get("superseded"):
+                result["finished"] += 1
+        if carry and time.monotonic() - started > budget_seconds:
+            for email, run_id in carry:
+                if run_id:
+                    pause_run(email, run_id)
+            result["behind"] = len(carry)
+            break
+        pending = carry
+    result["synced"] = len(touched)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Status, activity and undo (used by the blueprint)
+# ---------------------------------------------------------------------------
+
+def _iso(value: Any) -> Optional[str]:
+    value = _as_utc(value)
+    return value.isoformat() if value else None
+
+
+def status_payload(user_email: str, light: bool = False) -> Dict[str, Any]:
+    """Everything a client needs to pick a screen. `state` is the one field
+    that decides it; see docs/specs/gmail-tracker-contract.md."""
+    configured = gmail_configured() and gmail_oauth_enabled()
+    conn = get_connection(user_email) if configured else None
+    mode = consent_mode()
+    payload: Dict[str, Any] = {
+        "configured": configured, "connected": bool(conn), "state": "unavailable",
+        "gmail_address": None, "linked_at": None, "last_synced_at": None,
+        "pending_suggestions": 0, "has_more": False, "last_sync_summary": None,
+        "needs_reconnect": False, "reconnect_reason": None, "tracked_applications": 0,
+        "sync": None,
+        "auto_sync": {"enabled": auto_sync_enabled(), "interval_hours": auto_sync_interval_hours()},
+        "access": {"mode": mode, "expires_at": None},
+    }
+    if not configured:
+        return payload
+    payload["tracked_applications"] = DBConnect().get_db().tailoring_records.count_documents(
+        {"user_email": user_email})
+    if not conn:
+        payload["state"] = "not_connected"
+        return payload
+    run = conn.get("sync_run") or None
+    live = _run_is_live(run)
+    has_more = bool(conn.get("scan_next_page_token"))
+    linked = _as_utc(conn.get("linked_at"))
+    if mode == "testing" and linked:
+        payload["access"]["expires_at"] = (linked + timedelta(days=TESTING_ACCESS_DAYS)).isoformat()
+    sync = None
+    if run:
+        state = run.get("state")
+        if state == "running" and not live:
+            state = "paused"  # the worker is gone; the scheduled sync takes it over
+        sync = {key: run.get(key) for key in (
+            "run_id", "trigger", "batches", "outcome", "error_code", "error", *_RUN_COUNTERS)}
+        sync.update(state=state, started_at=_iso(run.get("started_at")),
+                    updated_at=_iso(run.get("updated_at")), finished_at=_iso(run.get("finished_at")))
+    payload.update({
+        "gmail_address": conn.get("gmail_address"),
+        "linked_at": _iso(linked),
+        "last_synced_at": _iso(conn.get("last_synced_at")),
+        # The validated review list, with the same evidence exclusions as
+        # GET /gmail/suggestions. Skipped while a client is polling progress.
+        "pending_suggestions": None if light else len(list_suggestions(user_email, limit=None)),
+        "has_more": has_more,
+        "last_sync_summary": conn.get("last_sync_summary"),
+        "needs_reconnect": bool(conn.get("needs_reconnect")),
+        "reconnect_reason": conn.get("reconnect_reason") if conn.get("needs_reconnect") else None,
+        "sync": sync,
+    })
+    if payload["needs_reconnect"]:
+        payload["state"] = "needs_reconnect"
+    elif live:
+        payload["state"] = "syncing"
+    elif has_more or (sync and sync["state"] == "paused"):
+        payload["state"] = "paused"
+    elif not conn.get("last_synced_at") and not conn.get("last_sync_summary"):
+        payload["state"] = "never_synced"
+    else:
+        payload["state"] = "synced"
+    return payload
+
+
+def health_report() -> Dict[str, Any]:
+    """Read-only. Which settings are present (never their values) and how the
+    connections stand. For the owner, on the box:
+
+        docker compose --env-file /etc/jobpilot/compose.env exec worker python -c \
+          "from services.gmail_service import print_health; print_health()"
+    """
+    now = datetime.now(timezone.utc)
+    connections = list(_connections().find({}, {
+        "needs_reconnect": 1, "last_synced_at": 1, "linked_at": 1, "scan_next_page_token": 1}))
+    week = now - timedelta(days=TESTING_ACCESS_DAYS)
+    return {
+        "settings_present": {key: bool(_get_config_value(key, "")) for key in (
+            "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_REDIRECT_URI",
+            "GMAIL_TOKEN_ENCRYPTION_KEY")},
+        "redirect_uri": _redirect_uri(),
+        "gmail_oauth_enabled": gmail_oauth_enabled(),
+        "connect_is_offered": gmail_configured() and gmail_oauth_enabled(),
+        "consent_mode": consent_mode(),
+        "auto_sync": {"enabled": auto_sync_enabled(), "interval_hours": auto_sync_interval_hours()},
+        "connections": {
+            "total": len(connections),
+            "needs_reconnect": sum(bool(c.get("needs_reconnect")) for c in connections),
+            "never_finished_a_scan": sum(not c.get("last_synced_at") for c in connections),
+            "scan_unfinished": sum(bool(c.get("scan_next_page_token")) for c in connections),
+            "linked_over_7_days_ago": sum(
+                bool(_as_utc(c.get("linked_at")) and _as_utc(c.get("linked_at")) < week)
+                for c in connections),
+        },
+    }
+
+
+def print_health() -> None:
+    print(json.dumps(health_report(), indent=2, default=str))
+
+
+def list_activity(user_email: str, limit: int = 20) -> List[Dict[str, Any]]:
+    """What sync changed by itself: which application moved, from what to
+    what, and the email that caused it. Newest first."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=ACTIVITY_DAYS)
+    docs = list(_suggestions().find(
+        {"user_email": user_email, "auto_applied": True, "applied_at": {"$gte": cutoff}},
+    ).sort([("applied_at", -1), ("_id", -1)]).limit(max(1, min(int(limit), 50))))
+    record_ids = [d.get("record_id") for d in docs if d.get("record_id")]
+    current = {r["record_id"]: (r.get("application") or {}).get("status") or "draft"
+               for r in DBConnect().get_db().tailoring_records.find(
+                   {"user_email": user_email, "record_id": {"$in": record_ids}},
+                   {"record_id": 1, "application.status": 1, "_id": 0})}
+    changes = []
+    for d in docs:
+        undone = bool(d.get("undone"))
+        changes.append({
+            "suggestion_id": d.get("suggestion_id"), "record_id": d.get("record_id"),
+            "company": d.get("company") or "", "title": d.get("title") or "",
+            "from_status": d.get("current_status") or "draft",
+            "to_status": d.get("suggested_status"),
+            "subject": html.unescape(d.get("subject") or ""),
+            "from_address": d.get("from_address") or "",
+            "email_received_at": d.get("email_received_at"),
+            "applied_at": _iso(d.get("applied_at")), "sync_run_id": d.get("sync_run_id"),
+            "undone": undone,
+            "undoable": not undone and current.get(d.get("record_id")) == d.get("suggested_status"),
+        })
+    return changes
+
+
+def undo_auto_apply(user_email: str, suggestion_id: str) -> Dict[str, Any]:
+    """Put an application back where it was before an automatic move.
+
+    Written as the user's own status change, so the same email (and anything
+    older) can only ever come back as a suggestion, never as another move.
+    """
+    s = _suggestions().find_one({"suggestion_id": suggestion_id, "user_email": user_email})
+    if not s:
+        raise LookupError("Suggestion not found")
+    if not s.get("auto_applied") or s.get("undone") or not s.get("applied") or not s.get("record_id"):
+        raise GmailUndoError("not_undoable")
+    to_status = s.get("suggested_status")
+    from_status = s.get("current_status") or "draft"
+    db = DBConnect().get_db()
+    record = db.tailoring_records.find_one(
+        {"record_id": s["record_id"], "user_email": user_email}, {"application": 1}) or {}
+    application = record.get("application") or {}
+    now = datetime.now(timezone.utc)
+    update: Dict[str, Any] = {"$set": {"application.status": from_status,
+                                       "application.updated_at": now, "updated_at": now}}
+    if to_status == "applied" and application.get("applied_at_source") == "gmail_receipt":
+        # The applied date came from this email too.
+        update["$unset"] = {key: "" for key in (
+            "application.applied_at", "application.applied_at_source",
+            "application.applied_date", "application.applied_tz")}
+    restored = db.tailoring_records.update_one(
+        {"record_id": s["record_id"], "user_email": user_email, "application.status": to_status},
+        update)
+    if not restored.matched_count:
+        raise GmailUndoError("status_changed")
+    try:
+        from services import application_ledger_service as _ledger
+        outcome = from_status if from_status in _ledger.OUTCOME_STATUSES else _ledger.OUTCOME_NONE
+        _ledger.set_outcome(user_email, record_id=s["record_id"], outcome=outcome, source="manual")
+    except Exception as _e:  # pragma: no cover - the mirror above stands
+        logger.warning("gmail: canonical undo failed (mirror stands): %s", _e)
+    changes = {"applied": False, "dismissed": True, "dismissed_at": now,
+               "dismissed_reason": "undone by user", "undone": True, "undone_at": now}
+    _suggestions().update_one({"suggestion_id": suggestion_id, "user_email": user_email},
+                              {"$set": changes})
+    s.update(changes)
+    return {"suggestion": _serialize_suggestion(s), "restored_status": from_status}
 
 
 # ---------------------------------------------------------------------------
@@ -2044,7 +2703,7 @@ def _serialize_suggestion(s: Dict[str, Any]) -> Dict[str, Any]:
     s.pop("_id", None)
     for key in ("resolution_lock_id", "resolution_lock_until", "resolution_record_id", "resolution_status"):
         s.pop(key, None)
-    for k in ("created_at", "applied_at"):
+    for k in ("created_at", "applied_at", "dismissed_at", "undone_at"):
         v = s.get(k)
         if hasattr(v, "isoformat"):
             s[k] = v.isoformat()

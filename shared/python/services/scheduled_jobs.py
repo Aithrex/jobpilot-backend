@@ -346,6 +346,12 @@ def dispatch_scheduled(name: str) -> Dict[str, Any]:
             # and refetches the ones an older resolver could not find.
             from services import company_logo_service
             return {"job": name, "result": company_logo_service.refresh_due(budget_seconds=240)}
+        if name == "gmail_sync":
+            # Inline on the scheduler thread, one mailbox at a time, inside a
+            # budget well under the 30-minute tick. Without it sync was manual
+            # only, so a status moved only when the user remembered to press.
+            from services import gmail_service
+            return {"job": name, "result": gmail_service.sync_due(budget_seconds=600)}
         if name == "bandit_nightly":
             return {"job": name, "result": run_bandit_nightly()}
         if name == "learning_due":

@@ -342,6 +342,15 @@ INDEX_SPECS = [
     # gmail_service:259 update_one({user_email}, upsert); :267 find_one({user_email}).
     ("gmail_connections", [("user_email", ASCENDING)],
      {"unique": True, "name": "user_email_unique"}),
+    # gmail_service.build_auth_url inserts a one-time state with expires_at;
+    # consume_state find_one_and_delete({state}). An abandoned consent attempt
+    # was never removed. gmail_service also asserts these two at runtime.
+    ("gmail_oauth_states", [("state", ASCENDING)], {"unique": True, "name": "state_unique"}),
+    ("gmail_oauth_states", [("expires_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expires"}),
+    # gmail_service.list_activity: the automatic moves of the last 30 days.
+    ("gmail_suggestions", [("user_email", ASCENDING), ("auto_applied", ASCENDING),
+                           ("applied_at", DESCENDING)], {"name": "user_auto_applied_at"}),
 
     # === password reset / login state (time-bounded) ======================
     # auth.py:412 find_one({token_hash}); :377 insert with expires_at.
