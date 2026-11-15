@@ -61,16 +61,20 @@ INDEX_SPECS = [
     ("users", [("email", ASCENDING)], {"unique": True, "name": "email_unique"}),
     # oauth_service.upsert_user:329-338 find_one({f"oauth_identities.{p}.subject"}).
     # Sparse: only users with that provider linked carry the field.
+    # UNIQUE since 2026-11-15: one provider identity, one account. A database
+    # that still has the older non-unique `oauth_<provider>_subject` index
+    # reports a conflict here; `scripts/migrate_auth_indexes.py --apply`
+    # checks for duplicates and swaps them.
     ("users", [("oauth_identities.google.subject", ASCENDING)],
-     {"sparse": True, "name": "oauth_google_subject"}),
+     {"sparse": True, "unique": True, "name": "oauth_google_subject_unique"}),
     ("users", [("oauth_identities.github.subject", ASCENDING)],
-     {"sparse": True, "name": "oauth_github_subject"}),
+     {"sparse": True, "unique": True, "name": "oauth_github_subject_unique"}),
     ("users", [("oauth_identities.linkedin.subject", ASCENDING)],
-     {"sparse": True, "name": "oauth_linkedin_subject"}),
+     {"sparse": True, "unique": True, "name": "oauth_linkedin_subject_unique"}),
     ("users", [("oauth_identities.microsoft.subject", ASCENDING)],
-     {"sparse": True, "name": "oauth_microsoft_subject"}),
+     {"sparse": True, "unique": True, "name": "oauth_microsoft_subject_unique"}),
     ("users", [("oauth_identities.apple.subject", ASCENDING)],
-     {"sparse": True, "name": "oauth_apple_subject"}),
+     {"sparse": True, "unique": True, "name": "oauth_apple_subject_unique"}),
 
     # === resume_assets (Resume Platform v3 §1.1 — canonical resume store) ==
     # One doc per uploaded file; resume_id is the immutable uuid4-hex key
@@ -351,6 +355,11 @@ INDEX_SPECS = [
     ("password_reset_tokens", [("expires_at", ASCENDING)],
      {"expireAfterSeconds": 0, "name": "ttl_expires"}),
     # oauth_service:202 find_one_and_delete({state}); state docs carry expires_at.
+    # email_code_service: newest live code per address; rows reaped at expiry.
+    ("auth_email_codes", [("email", ASCENDING), ("created_at", DESCENDING)],
+     {"name": "email_created"}),
+    ("auth_email_codes", [("expires_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expires"}),
     ("oauth_login_states", [("state", ASCENDING)], {"unique": True, "name": "state_unique"}),
     ("oauth_login_states", [("expires_at", ASCENDING)],
      {"expireAfterSeconds": 0, "name": "ttl_expires"}),

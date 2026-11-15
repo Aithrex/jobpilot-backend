@@ -10,14 +10,14 @@ Runs against the REAL auth service app (mongomock DB, no network).
 """
 import pytest
 
-from _vg_support import load_service_app
+from _vg_support import load_service_app, sign_up
 
 from utils import db_connect
 
 PASSWORD = "Str0ng!Pass1"
 NEW_PASSWORD = "Even5tr0nger!"
 
-COLLECTIONS = ("users", "user_preferences", "password_reset_tokens", "rate_limit_buckets")
+COLLECTIONS = ("users", "user_preferences", "password_reset_tokens", "rate_limit_buckets", "auth_email_codes")
 
 
 @pytest.fixture(autouse=True)
@@ -46,18 +46,21 @@ def _auth_header(token):
 
 
 def _register(client, email, password=PASSWORD):
-    resp = client.post("/api/auth/register", json={"email": email, "password": password})
-    assert resp.status_code == 201, resp.get_data(as_text=True)
+    resp = sign_up(client, email, password)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
     return resp.get_json()["access_token"]
 
 
 def _make_social_only(db, client, email):
     """Create the shape the Google OAuth callback produces: a user row with no
-    password_hash, then mint a session for it the way the callback does."""
+    password_hash and an address Google vouched for, then mint a session for
+    it the way the callback does."""
     db.users.insert_one({
         "email": email,
         "auth_providers": ["google"],
-        "google_subject": "sub-123",
+        "oauth_identities": {"google": {"subject": "sub-123", "email": email,
+                                        "email_verified": True}},
+        "email_verified": True,
         "plan": "free",
     })
     with client.application.app_context():

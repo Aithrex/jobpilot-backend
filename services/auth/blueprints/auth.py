@@ -8,8 +8,11 @@ whose routes are registered at the bottom of this module).
 
 Hard contract (verified against the frontend's src/lib/api.ts — do not change
 shapes without changing the client):
-  - register -> 201 {access_token, email}
-  - login    -> 200 {access_token, email, role?, sector?}
+  - login, otp/verify -> 200 {access_token, email, role?, sector?} (flat)
+  - register -> 202 {verification_required, email}: it mails a code and
+    stores nothing; /otp/verify creates the account (docs/specs/sign-in.md)
+  - every failure carries `code` (machine) and `message` (human); every 429
+    carries `retry_after` and the Retry-After header
   - reset payload field is snake_case `new_password`
   - AUTH FAILURES ARE NEVER 401. The frontend turns any 401 into a forced
     logout (auth:session-expired). Bad creds -> 400, exists -> 409,
@@ -29,9 +32,10 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity, create_access_token
 
 from utils.db_connect import DBConnect
-from utils.security import InputSanitizer, get_rate_limiter, get_client_ip
+from utils.security import InputSanitizer, check_rate_limit, get_client_ip
 from models.user import User
 from services import entitlements_service
+from services import email_code_service
 
 auth_bp = Blueprint("auth", __name__)
 logger = logging.getLogger(__name__)
@@ -44,6 +48,10 @@ ADMIN_EMAILS = {"harshith@aithrex.tech", "mannesiddardha@gmail.com"}
 MAX_LOGIN_ATTEMPTS = 8
 LOCKOUT_MINUTES = 15
 RESET_TOKEN_TTL_MINUTES = 30
+# Emailed codes. With 5 tries a code (email_code_service.MAX_ATTEMPTS) the
+# per-address cap bounds guessing at 25 in a million per hour.
+OTP_PER_EMAIL_PER_HOUR = 5
+OTP_REQUESTS_PER_IP_PER_HOUR = 20
 
 
 # ---------------------------------------------------------------------------
@@ -83,9 +91,23 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
 
 
-def _is_locked(user: dict) -> bool:
+def _lock_seconds_left(user: dict) -> int:
+    """Seconds until a password lockout ends (0 = not locked)."""
     lu = _aware(user.get("lockout_until"))
-    return bool(lu and lu > _now())
+    if not lu or lu <= _now():
+        return 0
+    return max(1, int((lu - _now()).total_seconds() + 0.999))
+
+
+def _burn_reset_tokens(email: str, reason: str) -> None:
+    """Invalidate reset links already in an inbox. Best effort."""
+    try:
+        _reset_tokens().update_many(
+            {"user_email": email, "used": False},
+            {"$set": {"used": True, "used_at": _now(), "invalidated_by": reason}},
+        )
+    except Exception as e:  # pragma: no cover - best effort
+        logger.warning("reset-token invalidation failed for %s: %s", email, e)
 
 
 def _preferences_for(email: str) -> dict:
@@ -126,20 +148,16 @@ def _touch_login(email: str, fingerprint_hash: str = None):
 
 
 def _register_failed_attempt(email: str):
-    """Increment failed-login counter; lock the account past the threshold."""
-    user = _users().find_one({"email": email}, {"login_attempts": 1})
-    attempts = int((user or {}).get("login_attempts", 0)) + 1
-    update = {"$set": {"login_attempts": attempts}}
-    if attempts >= MAX_LOGIN_ATTEMPTS:
-        update["$set"]["lockout_until"] = _now() + timedelta(minutes=LOCKOUT_MINUTES)
-    _users().update_one({"email": email}, update)
-
-
-def _ip_throttled(bucket: str, max_requests: int, window_seconds: int = 600) -> bool:
-    limiter = get_rate_limiter()
-    return limiter.is_rate_limited(
-        f"auth:{bucket}:{get_client_ip(request)}", max_requests=max_requests, window_seconds=window_seconds
-    )
+    """Count a wrong password; lock the account at the threshold. The count
+    is an atomic $inc, so parallel guesses cannot share one slot."""
+    from pymongo import ReturnDocument
+    user = _users().find_one_and_update(
+        {"email": email}, {"$inc": {"login_attempts": 1}},
+        projection={"login_attempts": 1}, return_document=ReturnDocument.AFTER)
+    if user and int(user.get("login_attempts") or 0) >= MAX_LOGIN_ATTEMPTS:
+        _users().update_one(
+            {"email": email},
+            {"$set": {"lockout_until": _now() + timedelta(minutes=LOCKOUT_MINUTES)}})
 
 
 def _retry_after(window_seconds: int) -> int:
@@ -148,10 +166,45 @@ def _retry_after(window_seconds: int) -> int:
     return max(1, int(window_seconds - (int(time.time()) % window_seconds)))
 
 
-def _rate_limited(retry_after: int, message: str):
-    resp = jsonify({"error": "rate_limited", "retry_after": retry_after, "message": message})
+def _throttle(bucket: str, max_requests: int, window_seconds: int = 600, subject: str = None):
+    """Count this request against `bucket`. Returns the seconds to wait when
+    the limit is spent, else None.
+
+    Shared across every process (`check_rate_limit`: a local first pass, then
+    one Mongo counter). The per-process limiter this replaced multiplied each
+    limit by the number of workers and again by blue/green. Keyed by client
+    IP unless `subject` names something else (an email hash)."""
+    subject = subject if subject is not None else get_client_ip(request)
+    if check_rate_limit(f"auth:{bucket}:{subject}", max_requests=max_requests,
+                        window_seconds=window_seconds):
+        return _retry_after(window_seconds)
+    return None
+
+
+def _fail(status: int, code: str, message: str, **extra):
+    """One failure shape for sign-in: `code` for the client to switch on,
+    `message` to show. `error` repeats the message because older clients
+    render that key. Never 401 (the frontend logs out on any 401)."""
+    body = {"error": message, "code": code, "message": message}
+    body.update(extra)
+    return jsonify(body), status
+
+
+def _too_many(retry_after: int, message: str, code: str = "rate_limited"):
+    """The one 429 shape: a body `retry_after` and the `Retry-After` header."""
+    retry_after = max(1, int(retry_after))
+    resp = jsonify({"error": "rate_limited", "code": code, "message": message,
+                    "retry_after": retry_after})
     resp.headers["Retry-After"] = str(retry_after)
     return resp, 429
+
+
+def _rate_limited(retry_after: int, message: str):
+    return _too_many(retry_after, message)
+
+
+TOO_MANY_ATTEMPTS = "Too many attempts. Please try again in a few minutes."
+ACCOUNT_CLOSED = "This account has been closed."
 
 
 def _note_gpc(email: str) -> None:
@@ -166,75 +219,155 @@ def _note_gpc(email: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Email / password
+# Who has proven what
 # ---------------------------------------------------------------------------
-@auth_bp.route("/register", methods=["POST"])
-def register():
-    if _ip_throttled("register", max_requests=15):
-        return jsonify({"error": "Too many attempts. Please try again later."}), 429
+SOCIAL_PROVIDERS = ("google", "github", "linkedin", "microsoft", "apple")
 
-    data = request.get_json(force=True, silent=True) or {}
-    email = InputSanitizer.sanitize_email(data.get("email", ""))
-    password = data.get("password") or ""
-    if not email:
-        return jsonify({"error": "A valid email is required"}), 400
 
-    ok, msg = User.validate_password(password)
-    if not ok:
-        return jsonify({"error": msg}), 400
+def _email_is_verified(user: dict) -> bool:
+    """Has anyone proven they receive mail at this account's address?
 
-    # Clickwrap (US launch). Both fields are OPTIONAL so OAuth signups and
-    # older clients keep working; an explicit "not old enough" is refused.
+    True after an emailed code or reset link, or when a sign-in provider that
+    vouches for this same address is linked. Password accounts created before
+    2026-11 were never verified; they pass through a code once."""
+    if user.get("email_verified") is True:
+        return True
+    email = user.get("email")
+    for identity in (user.get("oauth_identities") or {}).values():
+        if isinstance(identity, dict) and identity.get("email_verified") is True \
+                and identity.get("email") == email:
+            return True
+    return False
+
+
+def _sign_in_methods(user: dict) -> list:
+    """What this account can sign in with, for "use Google instead" hints.
+    An emailed code always works, so it is not listed."""
+    methods = ["password"] if user.get("password_hash") else []
+    linked = set(user.get("auth_providers") or []) | set((user.get("oauth_identities") or {}).keys())
+    methods.extend(p for p in SOCIAL_PROVIDERS if p in linked)
+    return methods
+
+
+def _session_payload(user: dict) -> dict:
+    """The flat success payload: {access_token, email, role?, sector?}."""
+    email = user["email"]
+    payload = {"access_token": create_access_token(identity=email), "email": email}
+    if user.get("role"):
+        payload["role"] = user["role"]
+    if user.get("sector"):
+        payload["sector"] = user["sector"]
+    return payload
+
+
+def _console_delivery_allowed() -> bool:
+    """Local development with no mail provider: the code is in the server log
+    (`[email:dev-fallback]`), and that counts as delivered. Never in prod."""
+    import os
+    from services import email_service
+    return (os.getenv("ENVIRONMENT", "development").lower() == "development"
+            and not email_service.email_configured())
+
+
+def _send_code(email: str):
+    """Mail a fresh code. Returns None when it went, else the error response.
+
+    Production mail has one provider and `send_email` swallows its failures,
+    so the boolean is the only signal: a False here is told to the person
+    instead of leaving them waiting for an email that is not coming."""
+    from services import email_service
+
+    wait = email_code_service.cooldown_remaining(email)
+    if wait:
+        return _too_many(wait, "We just sent a code. You can ask for another one shortly.",
+                         code="code_cooldown")
+    wait = _throttle("otp-email", OTP_PER_EMAIL_PER_HOUR, 3600, subject=_hash_token(email)[:32])
+    if wait:
+        return _too_many(wait, "Too many codes were requested for this address. Please try again later.")
+
+    code = email_code_service.issue(email)
+    sent = False
+    try:
+        sent = bool(email_service.send_login_code(email, code, email_code_service.CODE_TTL_MINUTES))
+    except Exception as e:
+        logger.error("login-code send raised for %s: %s", email, type(e).__name__)
+    if sent or _console_delivery_allowed():
+        return None
+
+    email_code_service.withdraw(email)
+    logger.error(
+        "login-code-not-sent email=%s provider=%s configured=%s suppressed=%s",
+        email, email_service.provider_name(),
+        email_service.email_configured(), email_service.is_suppressed(email),
+    )
+    return _fail(503, "email_send_failed",
+                 "We could not send an email to that address. Check it for typos, or try again in a minute.")
+
+
+def _code_sent_body() -> dict:
+    return {
+        "ok": True,
+        "message": "We sent a 6-digit code to that address.",
+        "resend_after": email_code_service.RESEND_COOLDOWN_SECONDS,
+        "expires_in": email_code_service.CODE_TTL_MINUTES * 60,
+    }
+
+
+def _signup_consent(data: dict):
+    """Clean the clickwrap fields. Returns (terms_version, error_response)."""
     from services import privacy_service
     if data.get("age_confirmed") is False:
-        return jsonify({"error": "age_requirement",
-                        "message": privacy_service.age_requirement_message()}), 400
+        return None, _fail(400, "age_requirement", privacy_service.age_requirement_message(),
+                           error="age_requirement")
     try:
-        terms_version = privacy_service.clean_terms_version(data.get("terms_version"))
+        return privacy_service.clean_terms_version(data.get("terms_version")), None
     except privacy_service.PrivacyError as e:
-        return jsonify({"error": e.code, "message": e.message}), 400
+        return None, _fail(400, e.code, e.message, error=e.code)
 
-    if _users().find_one({"email": email}, {"_id": 1}):
-        return jsonify({"error": "An account with this email already exists"}), 409
+
+def _create_account(email: str, data: dict, *, password: str, terms_version) -> dict:
+    """Insert a new account whose email has just been proven by a code, with
+    everything sign-up has always done (preferences seed, clickwrap record,
+    welcome mail, managed mailbox). Raises DuplicateKeyError on a lost race."""
+    from services import privacy_service
 
     role = InputSanitizer.sanitize_string(data.get("role") or "", 120) or None
     sector = InputSanitizer.sanitize_string(data.get("sector") or "", 120) or None
     fingerprint = InputSanitizer.sanitize_string(data.get("fingerprint_hash") or "", 128) or None
-    # Optional at sign-up (the current form doesn't collect it; OAuth does). When
-    # present it seeds the managed mailbox's readable local part below; when
-    # absent the alias is minted as an opaque stopgap and self-repairs later
-    # (managed_mailbox_service.repair_local_part).
+    # Optional at sign-up. When present it seeds the managed mailbox's readable
+    # local part; when absent the alias is an opaque stopgap that repairs
+    # itself later (managed_mailbox_service.repair_local_part).
     name = InputSanitizer.sanitize_string(data.get("name") or "", 120) or None
 
+    now = _now()
     doc = {
         "email": email,
-        "password_hash": User.hash_password(password),
         "name": name,
         "role": role,
         "sector": sector,
         "plan": entitlements_service.DEFAULT_PLAN,
-        "plan_since": _now(),
-        "auth_providers": ["password"],
-        "email_verified": False,
+        "plan_since": now,
+        "auth_providers": ["password"] if password else ["email_code"],
+        "email_verified": True,
+        "email_verified_at": now,
         "is_admin": email in ADMIN_EMAILS,
         "status": "active",
         "login_attempts": 0,
-        "created_at": _now(),
-        "updated_at": _now(),
+        "created_at": now,
+        "updated_at": now,
+        "last_login": now,
     }
+    if password:
+        doc["password_hash"] = User.hash_password(password)
     if fingerprint:
         doc["fingerprints"] = [fingerprint]
-    try:
-        _users().insert_one(doc)
-        # Seed an empty preferences doc so the frontend shows onboarding.
-        _prefs().update_one(
-            {"user_email": email},
-            {"$setOnInsert": {"user_email": email, "onboarding_complete": False, "created_at": _now()}},
-            upsert=True,
-        )
-    except Exception as e:
-        logger.error("register failed for %s: %s", email, e)
-        return jsonify({"error": "Could not create account"}), 500
+    _users().insert_one(doc)
+    # Seed an empty preferences doc so the frontend shows onboarding.
+    _prefs().update_one(
+        {"user_email": email},
+        {"$setOnInsert": {"user_email": email, "onboarding_complete": False, "created_at": now}},
+        upsert=True,
+    )
 
     # Clickwrap facts + the erased-address marker. Runs BEFORE the welcome
     # email: a new account on an address that was erased earlier is a new
@@ -246,10 +379,8 @@ def register():
             terms_version=terms_version)
     except Exception as e:
         logger.warning("clickwrap record failed at signup: %s", type(e).__name__)
-    _note_gpc(email)
 
-    # Welcome email — best-effort, mirrors the password-reset dispatch. A mail
-    # failure (or unconfigured provider in dev) must never break signup.
+    # Welcome email: best-effort. A mail failure must never break signup.
     try:
         from utils.config import AppUrlsConfig
         from services import email_service
@@ -257,36 +388,215 @@ def register():
     except Exception as e:
         logger.warning("welcome email dispatch failed for %s: %s", email, e)
 
-    # Managed application mailbox — AUTO-PROVISION at signup (spec §6). The user
-    # must NEVER be asked to "create a private email": the address is minted here
-    # and forwarding defaults to this very address, enabled + verified.
-    # Best-effort, EXACTLY like the welcome email above: idempotent (safe to
-    # re-run), a pure DB write, and wrapped so an unconfigured domain, a Mongo
-    # blip or a collision-exhaustion can NEVER fail signup.
+    # Managed application mailbox: AUTO-PROVISION at signup (spec §6). The user
+    # must NEVER be asked to "create a private email": the address is minted
+    # here and forwarding defaults to this very address. Idempotent, a pure DB
+    # write, and wrapped so an unconfigured domain or a Mongo blip can never
+    # fail signup.
     try:
         from services import managed_mailbox_service
         managed_mailbox_service.provision(email, name)
     except Exception as e:
         logger.warning("mailbox auto-provision failed for %s: %s", email, e)
-
-    # Return a token (the frontend deliberately discards it and asks the user to
-    # log in explicitly — see AuthContext register()). Shape stays {access_token,email}.
-    token = create_access_token(identity=email)
-    return jsonify({"access_token": token, "email": email}), 201
+    return doc
 
 
+# ---------------------------------------------------------------------------
+# Sign-up
+# ---------------------------------------------------------------------------
+@auth_bp.route("/register", methods=["POST"])
+def register():
+    """Step 1 of password sign-up: check the request and mail a code.
+
+    Nothing is stored. The account is created by `/otp/verify`, which carries
+    the code AND the password, so an account never exists (and a password
+    never works) for an address nobody has proven they own. Before 2026-11
+    this route created the account at once, which let anyone register someone
+    else's address and keep a working password on it.
+    """
+    wait = _throttle("register", 15)
+    if wait:
+        return _too_many(wait, TOO_MANY_ATTEMPTS)
+
+    data = request.get_json(force=True, silent=True) or {}
+    email = InputSanitizer.sanitize_email(data.get("email", ""))
+    password = data.get("password") or ""
+    if not email:
+        return _fail(400, "invalid_email", "A valid email is required")
+
+    ok, msg = User.validate_password(password)
+    if not ok:
+        return _fail(400, "weak_password", msg)
+
+    _terms, bad = _signup_consent(data)
+    if bad:
+        return bad
+
+    existing = _users().find_one({"email": email})
+    if existing:
+        if existing.get("is_deleted"):
+            return _fail(403, "account_closed", ACCOUNT_CLOSED)
+        return _fail(409, "account_exists", "An account with this email already exists",
+                     methods=_sign_in_methods(existing))
+
+    # A new relationship on an address that was erased earlier: without this
+    # the erasure marker would block the code email itself.
+    try:
+        from services import privacy_service
+        privacy_service.clear_account_deleted_marker(email)
+    except Exception as e:  # pragma: no cover - best effort
+        logger.warning("erasure marker clear failed: %s", type(e).__name__)
+
+    failed = _send_code(email)
+    if failed:
+        return failed
+    body = _code_sent_body()
+    body.update({"email": email, "verification_required": True})
+    return jsonify(body), 202
+
+
+# ---------------------------------------------------------------------------
+# Emailed one-time code: sign in, sign up, and prove an address
+# ---------------------------------------------------------------------------
+@auth_bp.route("/otp/request", methods=["POST"])
+def otp_request():
+    """Mail a 6-digit code. The answer is the same whether or not the address
+    has an account (a code signs in an existing one and creates a new one)."""
+    wait = _throttle("otp-request", OTP_REQUESTS_PER_IP_PER_HOUR, 3600)
+    if wait:
+        return _too_many(wait, "Too many codes requested. Please try again later.")
+
+    data = request.get_json(force=True, silent=True) or {}
+    email = InputSanitizer.sanitize_email(data.get("email", ""))
+    if not email:
+        return _fail(400, "invalid_email", "Enter a valid email address.")
+
+    user = _users().find_one({"email": email}, {"is_deleted": 1})
+    if user and user.get("is_deleted"):
+        return _fail(403, "account_closed", ACCOUNT_CLOSED)
+    if not user:
+        try:
+            from services import privacy_service
+            privacy_service.clear_account_deleted_marker(email)
+        except Exception as e:  # pragma: no cover - best effort
+            logger.warning("erasure marker clear failed: %s", type(e).__name__)
+
+    failed = _send_code(email)
+    if failed:
+        return failed
+    return jsonify(_code_sent_body()), 200
+
+
+@auth_bp.route("/otp/verify", methods=["POST"])
+def otp_verify():
+    """Trade a code for a session.
+
+    Existing account: signs in and marks the email verified.
+    New address: creates the account. That needs the same age and terms
+    consent the register form records (`consent_required` otherwise), and
+    takes an optional `password`.
+
+    An unverified account that already holds a password is the one delicate
+    case. That password was set by someone who never proved the address, so
+    it survives only if this request repeats it (the person signing up, or a
+    pre-2026-11 account finishing verification). Otherwise it is removed and
+    the response says so with `password_removed`.
+    """
+    wait = _throttle("otp-verify", 40)
+    if wait:
+        return _too_many(wait, TOO_MANY_ATTEMPTS)
+
+    data = request.get_json(force=True, silent=True) or {}
+    email = InputSanitizer.sanitize_email(data.get("email", ""))
+    code = email_code_service.normalize_code(data.get("code"))
+    password = data.get("password") if isinstance(data.get("password"), str) else ""
+    if not email or len(code) != 6:
+        return _fail(400, "code_invalid", "Enter the 6-digit code from the email.")
+
+    user = _users().find_one({"email": email})
+    if user and user.get("is_deleted"):
+        return _fail(403, "account_closed", ACCOUNT_CLOSED)
+
+    # Everything that can be wrong with the REQUEST is answered before the
+    # code is looked at, so fixing it does not cost one of the five tries.
+    terms_version = None
+    if not user:
+        terms_version, bad = _signup_consent(data)
+        if bad:
+            return bad
+        if data.get("age_confirmed") is not True:
+            from services import privacy_service
+            return _fail(400, "consent_required",
+                         f"Confirm you are at least {privacy_service.minimum_age()} and agree to the Terms "
+                         "to create your account.")
+        if password:
+            ok, msg = User.validate_password(password)
+            if not ok:
+                return _fail(400, "weak_password", msg)
+
+    try:
+        row = email_code_service.check(email, code)
+    except email_code_service.CodeError as e:
+        return _fail(400, e.code, e.message, **e.extra)
+    if not email_code_service.consume(row):
+        return _fail(400, "code_expired", "That code has expired. Request a new one.")
+
+    created = False
+    password_removed = False
+    if not user:
+        try:
+            user = _create_account(email, data, password=password, terms_version=terms_version)
+            created = True
+        except Exception as e:
+            # Two verifies for one new address: the other one created it.
+            user = _users().find_one({"email": email})
+            if not user:
+                logger.error("account create failed for %s: %s", email, e)
+                return _fail(500, "signup_failed", "Could not create account")
+
+    if not created:
+        now = _now()
+        update = {
+            "$set": {"email_verified": True, "email_verified_at": now, "last_login": now,
+                     "login_attempts": 0, "updated_at": now},
+            "$unset": {"lockout_until": ""},
+        }
+        unproven_password = bool(user.get("password_hash")) and not _email_is_verified(user)
+        if unproven_password and not (password and User.verify_password(password, user["password_hash"])):
+            update["$unset"]["password_hash"] = ""
+            update["$pull"] = {"auth_providers": "password"}
+            password_removed = True
+        fingerprint = InputSanitizer.sanitize_string(data.get("fingerprint_hash") or "", 128) or None
+        if fingerprint:
+            update["$addToSet"] = {"fingerprints": fingerprint}
+        _users().update_one({"email": email}, update)
+        if password_removed:
+            _burn_reset_tokens(email, "email-verified")
+
+    _note_gpc(email)
+    body = _session_payload(user)
+    body["created"] = created
+    if password_removed:
+        body["password_removed"] = True
+    return jsonify(body), 200
+
+
+# ---------------------------------------------------------------------------
+# Password sign-in
+# ---------------------------------------------------------------------------
 @auth_bp.route("/login", methods=["POST"])
 def login():
-    if _ip_throttled("login", max_requests=30):
-        return jsonify({"error": "Too many attempts. Please try again later."}), 429
+    wait = _throttle("login", 30)
+    if wait:
+        return _too_many(wait, TOO_MANY_ATTEMPTS)
 
     data = request.get_json(force=True, silent=True) or {}
     email = InputSanitizer.sanitize_email(data.get("email", ""))
     password = data.get("password") or ""
     fingerprint = InputSanitizer.sanitize_string(data.get("fingerprint_hash") or "", 128) or None
 
-    # Uniform invalid-credentials response (no enumeration via timing/message).
-    invalid = (jsonify({"error": "Invalid email or password"}), 400)
+    # One answer for a wrong password and an unknown address.
+    invalid = _fail(400, "invalid_credentials", "Invalid email or password")
     if not email or not password:
         return invalid
 
@@ -297,35 +607,41 @@ def login():
     if user.get("is_deleted"):
         # Account is soft-deleted and pending erasure (AUDIT-P1-004). Refuse
         # re-auth so it can't be resurrected mid-purge. 403, never 401.
-        return jsonify({"error": "This account has been closed."}), 403
+        return _fail(403, "account_closed", ACCOUNT_CLOSED)
 
-    if _is_locked(user):
-        return jsonify({"error": "Account temporarily locked due to failed attempts. Try again later."}), 429
+    locked_for = _lock_seconds_left(user)
+    if locked_for:
+        return _too_many(locked_for,
+                         "Too many wrong passwords, so password sign-in is paused for this account. "
+                         "You can still sign in with an emailed code.",
+                         code="account_locked")
 
     if not user.get("password_hash"):
-        # Social-only account with no password set. `social_only` lets the client
-        # steer to the in-session "add a password" flow (Settings > Profile)
-        # instead of the reset email, which is the reliable path.
-        return jsonify({
-            "error": "This account was created with social sign-in and has no password yet. "
-                     "Sign in with your provider, then add a password under Settings > Profile.",
-            "social_only": True,
-            "auth_providers": user.get("auth_providers", []),
-        }), 400
+        # No password on this account: it was made with a sign-in provider or
+        # an emailed code. `social_only` and `auth_providers` let the client
+        # offer the method that works instead of a dead end.
+        methods = _sign_in_methods(user)
+        if methods:
+            message = ("This account signs in with " + " or ".join(m.capitalize() for m in methods)
+                       + " and has no password yet.")
+        else:
+            message = "This account has no password yet. Sign in with an emailed code."
+        return _fail(400, "no_password", message, social_only=bool(methods),
+                     auth_providers=methods, methods=methods)
 
     if not User.verify_password(password, user["password_hash"]):
         _register_failed_attempt(email)
         return invalid
 
+    if not _email_is_verified(user):
+        # Right password, but nobody has proven this address. The client asks
+        # for a code and sends this same password with it (/otp/verify).
+        return _fail(403, "email_unverified",
+                     "Confirm your email to finish signing in. We will send you a 6-digit code.")
+
     _touch_login(email, fingerprint)
     _note_gpc(email)
-    token = create_access_token(identity=email)
-    resp = {"access_token": token, "email": email}
-    if user.get("role"):
-        resp["role"] = user["role"]
-    if user.get("sector"):
-        resp["sector"] = user["sector"]
-    return jsonify(resp), 200
+    return jsonify(_session_payload(user)), 200
 
 
 @auth_bp.route("/logout", methods=["POST"])
@@ -558,13 +874,14 @@ def delete_account():
 # ---------------------------------------------------------------------------
 @auth_bp.route("/check-user", methods=["POST"])
 def check_user():
-    if _ip_throttled("check-user", max_requests=30):
-        return jsonify({"error": "Too many requests"}), 429
+    wait = _throttle("check-user", 30)
+    if wait:
+        return _too_many(wait, "Too many requests. Please try again in a few minutes.")
     data = request.get_json(force=True, silent=True) or {}
     fp = InputSanitizer.sanitize_string(data.get("fingerprint_hash") or "", 128)
     if not fp:
         return jsonify({"exists": False}), 200
-    user = _users().find_one({"fingerprints": fp}, {"email": 1})
+    user = _users().find_one({"fingerprints": fp, "is_deleted": {"$ne": True}}, {"email": 1})
     if user:
         return jsonify({"exists": True, "email": user.get("email")}), 200
     return jsonify({"exists": False}), 200
@@ -572,28 +889,29 @@ def check_user():
 
 @auth_bp.route("/check-email", methods=["POST"])
 def check_email():
-    if _ip_throttled("check-email", max_requests=30):
-        return jsonify({"error": "Too many requests"}), 429
+    """What the email-first sign-in screen needs to offer the right next step:
+    does the address have an account, and how does that account sign in."""
+    wait = _throttle("check-email", 30)
+    if wait:
+        return _too_many(wait, "Too many requests. Please try again in a few minutes.")
     data = request.get_json(force=True, silent=True) or {}
     email = InputSanitizer.sanitize_email(data.get("email", ""))
     if not email:
         return jsonify({"exists": False}), 200
-    exists = bool(_users().find_one({"email": email}, {"_id": 1}))
-    return jsonify({"exists": exists}), 200
+    user = _users().find_one({"email": email})
+    if not user:
+        return jsonify({"exists": False}), 200
+    if user.get("is_deleted"):
+        return jsonify({"exists": True, "closed": True, "methods": []}), 200
+    methods = _sign_in_methods(user)
+    return jsonify({"exists": True, "has_password": "password" in methods,
+                    "methods": methods}), 200
 
 
-@auth_bp.route("/validate-password", methods=["POST"])
-def validate_password():
-    if _ip_throttled("validate-password", max_requests=30):
-        return jsonify({"error": "Too many requests"}), 429
-    data = request.get_json(force=True, silent=True) or {}
-    email = InputSanitizer.sanitize_email(data.get("email", ""))
-    password = data.get("password") or ""
-    if not email or not password:
-        return jsonify({"valid": False}), 200
-    user = _users().find_one({"email": email}, {"password_hash": 1})
-    valid = bool(user and user.get("password_hash") and User.verify_password(password, user["password_hash"]))
-    return jsonify({"valid": valid}), 200
+# `/validate-password` was removed on 2026-11-15. It answered "is this the
+# password?" for any address without touching the lockout counter, which made
+# it a free password-guessing oracle. `/login` is the only route that tests a
+# password, and it counts every miss.
 
 
 # ---------------------------------------------------------------------------
@@ -603,16 +921,20 @@ def validate_password():
 def request_password_reset():
     # Always return ok:true regardless of whether the email exists — never leak
     # account existence through this endpoint.
-    if _ip_throttled("reset-request", max_requests=10):
-        return jsonify({"error": "Too many requests"}), 429
+    wait = _throttle("reset-request", 10)
+    if wait:
+        return _too_many(wait, "Too many requests. Please try again in a few minutes.")
     data = request.get_json(force=True, silent=True) or {}
     email = InputSanitizer.sanitize_email(data.get("email", ""))
     generic = jsonify({"ok": True, "message": "If an account exists for that email, a reset link is on its way."})
 
     if not email:
         return generic, 200
-    user = _users().find_one({"email": email}, {"_id": 1})
-    if not user:
+    user = _users().find_one({"email": email}, {"_id": 1, "is_deleted": 1})
+    if not user or user.get("is_deleted"):
+        return generic, 200
+    # Per address as well as per IP, so one inbox cannot be flooded from many.
+    if _throttle("reset-email", 5, 3600, subject=_hash_token(email)[:32]):
         return generic, 200
 
     token = secrets.token_urlsafe(32)
@@ -652,6 +974,9 @@ def request_password_reset():
 
 @auth_bp.route("/reset-password", methods=["POST"])
 def reset_password():
+    wait = _throttle("reset-password", 10)
+    if wait:
+        return _too_many(wait, TOO_MANY_ATTEMPTS)
     data = request.get_json(force=True, silent=True) or {}
     token = data.get("token") or ""
     new_password = data.get("new_password") or ""
@@ -669,15 +994,27 @@ def reset_password():
         return jsonify({"error": "This reset link has expired. Please request a new one."}), 400
 
     email = rec.get("user_email")
+    # Single use, decided atomically: two requests with one link, one winner.
+    claimed = _reset_tokens().update_one(
+        {"_id": rec["_id"], "used": False}, {"$set": {"used": True, "used_at": _now()}})
+    if claimed.modified_count != 1:
+        return jsonify({"error": "Invalid or expired reset link"}), 400
+    user = _users().find_one({"email": email}, {"is_deleted": 1})
+    if not user:
+        return jsonify({"error": "Invalid or expired reset link"}), 400
+    if user.get("is_deleted"):
+        return _fail(403, "account_closed", ACCOUNT_CLOSED)
+    # The link was read from this address's inbox, which proves the address.
     _users().update_one(
         {"email": email},
         {
-            "$set": {"password_hash": User.hash_password(new_password), "updated_at": _now(), "login_attempts": 0},
+            "$set": {"password_hash": User.hash_password(new_password), "updated_at": _now(),
+                     "login_attempts": 0, "email_verified": True, "email_verified_at": _now()},
             "$unset": {"lockout_until": ""},
             "$addToSet": {"auth_providers": "password"},
         },
     )
-    _reset_tokens().update_one({"_id": rec["_id"]}, {"$set": {"used": True, "used_at": _now()}})
+    _burn_reset_tokens(email, "reset-password")
     return jsonify({"ok": True, "message": "Your password has been reset. You can now log in."}), 200
 
 
@@ -717,8 +1054,9 @@ def set_password():
     has_password = bool(user.get("password_hash"))
     if has_password:
         # Throttle only the branch that verifies a secret.
-        if _ip_throttled("set-password", max_requests=20):
-            return jsonify({"error": "Too many attempts. Please try again later."}), 429
+        wait = _throttle("set-password", 20)
+        if wait:
+            return _too_many(wait, TOO_MANY_ATTEMPTS)
         if not current_password:
             return jsonify({"error": "Enter your current password."}), 400
         if not User.verify_password(current_password, user["password_hash"]):
@@ -740,13 +1078,7 @@ def set_password():
     )
     # Any reset link already in flight is now stale — burn it so an old email
     # sitting in an inbox can't overwrite the password just chosen.
-    try:
-        _reset_tokens().update_many(
-            {"user_email": email, "used": False},
-            {"$set": {"used": True, "used_at": _now(), "invalidated_by": "set-password"}},
-        )
-    except Exception as e:  # pragma: no cover - best effort
-        logger.warning("reset-token invalidation failed for %s: %s", email, e)
+    _burn_reset_tokens(email, "set-password")
 
     providers = list(user.get("auth_providers") or [])
     if "password" not in providers:

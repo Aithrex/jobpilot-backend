@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from _vg_support import load_service_app
+from _vg_support import load_service_app, sign_up
 
 from services import quota_ledger_service as ql
 from services import usage_service
@@ -228,9 +228,8 @@ def auth_app(db):
 
 def _register_and_login(auth_app, email=EMAIL):
     client = auth_app.test_client()
-    reg = client.post("/api/auth/register",
-                      json={"email": email, "password": PASSWORD})
-    assert reg.status_code == 201, reg.get_data(as_text=True)
+    reg = sign_up(client, email, PASSWORD)
+    assert reg.status_code == 200, reg.get_data(as_text=True)
     login = client.post("/api/auth/login",
                         json={"email": email, "password": PASSWORD})
     assert login.status_code == 200, login.get_data(as_text=True)
