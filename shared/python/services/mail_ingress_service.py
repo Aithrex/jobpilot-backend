@@ -583,9 +583,14 @@ def _apply_tracker_status(user_email: str, record_id: str, tracker_status: str) 
                 applied_at, user_email)
         except Exception as e:
             logger.warning("[mail-ingress] applied_date derivation failed: %s", e)
+    change: Dict[str, Any] = {"$set": updates}
+    from services import application_stages
+    reached = application_stages.first_reached(tracker_status)
+    if reached:
+        change["$min"] = reached
     res = db.tailoring_records.update_one(
         {"record_id": record_id, "user_email": user_email},
-        {"$set": updates},
+        change,
     )
     matched = bool(res.matched_count)
 

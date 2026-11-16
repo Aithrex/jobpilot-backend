@@ -1463,9 +1463,18 @@ def update_application(record_id):
 
     try:
         db = DBConnect().get_db()
+        change = {"$set": updates}
+        if status:
+            # Remember the first time this application reached the stage, so
+            # the funnel can count an interview that later ended in a rejection.
+            from services import application_stages
+            reached = application_stages.first_reached(
+                status, updates.get("application.applied_at") if status == "applied" else None)
+            if reached:
+                change["$min"] = reached
         result = db.tailoring_records.update_one(
             {"record_id": record_id, "user_email": user_email},
-            {"$set": updates},
+            change,
         )
         if not result.matched_count:
             return jsonify({"error": "Record not found"}), 404
@@ -1550,6 +1559,8 @@ def update_application(record_id):
                 d.isoformat() if hasattr(d, "isoformat") else d
                 for d in (app["interview_dates"] or [])
             ]
+        from services import application_stages
+        application_stages.serialize(app)
         return jsonify({"application": app}), 200
     except Exception as e:
         logger.exception("Update application error: %s", e)
@@ -4280,12 +4291,59 @@ def gmail_auth_url():
     # Kill-switch: block the gmail.readonly consent flow independent of creds.
     if not gmail_service.gmail_oauth_enabled() or not gmail_service.gmail_configured():
         return _gmail_error(*_GMAIL_UNAVAILABLE, 503)
+    # While Google limits the app to listed accounts, only a person whose
+    # address the owner has added is sent to Google. Anyone else would be
+    # stopped on Google's own page with no way back. 403, never 401.
+    try:
+        from services import gmail_access_service
+        allowed = gmail_access_service.may_connect(
+            user_email, bool(gmail_service.get_connection(user_email)))
+    except Exception as e:
+        logger.exception("gmail access check failed: %s", e)
+        return _gmail_error("Could not start the Google sign-in. Try again in a moment.",
+                            "gmail_error", 500)
+    if not allowed:
+        return _gmail_error("Gmail updates are in early access. Ask for access from the tracker, "
+                            "and connect once your address has been added.",
+                            "gmail_access_required", 403)
     try:
         url = gmail_service.build_auth_url(user_email)
         return jsonify({"auth_url": url}), 200
     except Exception as e:
         logger.exception("gmail auth-url error: %s", e)
         return _gmail_error("Could not start the Google sign-in. Try again in a moment.",
+                            "gmail_error", 500)
+
+
+@resume_bp.route("/gmail/access-request", methods=["POST"])
+@jwt_required()
+def gmail_access_request():
+    """Ask to be let in while Gmail connect is by invitation. Body:
+    {google_email?} - the Google account the person will connect; their
+    account address when omitted. Answers with the same `access` block as
+    GET /gmail/status."""
+    user_email = get_jwt_identity()
+    client_ip = get_client_ip(request)
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(f"gmail_access:{user_email}:{client_ip}", max_requests=6, window_seconds=3600):
+        return _gmail_error("You have asked several times in the last hour. Your request is saved; "
+                            "there is no need to send it again.", "rate_limited", 429)
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        return _gmail_error("Expected a JSON object.", "bad_request", 400)
+    from services import gmail_service, gmail_access_service
+    if not gmail_service.gmail_oauth_enabled() or not gmail_service.gmail_configured():
+        return _gmail_error(*_GMAIL_UNAVAILABLE, 503)
+    try:
+        access = gmail_access_service.request_access(user_email, data.get("google_email"))
+        return jsonify({"access": {"mode": gmail_service.consent_mode(), **access}}), 200
+    except gmail_access_service.GmailAccessError as e:
+        return _gmail_error(str(e), e.code, 400)
+    except Exception as e:
+        logger.exception("gmail access request error: %s", e)
+        return _gmail_error("Your request could not be saved. Try again in a moment.",
                             "gmail_error", 500)
 
 

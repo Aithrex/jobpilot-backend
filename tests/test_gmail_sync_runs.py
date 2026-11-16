@@ -322,7 +322,10 @@ def test_status_says_when_google_will_end_a_testing_mode_connection(db, monkeypa
     assert access["mode"] == "testing"
     assert datetime.fromisoformat(access["expires_at"]) - NOW.replace(microsecond=0) <= timedelta(days=7, seconds=1)
     monkeypatch.setattr(gs, "consent_mode", lambda: "production")
-    assert gs.status_payload(USER)["access"] == {"mode": "production", "expires_at": None}
+    published = gs.status_payload(USER)["access"]
+    assert (published["mode"], published["expires_at"]) == ("production", None)
+    # The block also says who may connect (tests/test_gmail_access.py).
+    assert published["gate"] == "open" and published["state"] == "approved"
 
 
 def test_consent_mode_is_testing_until_the_owner_says_otherwise(monkeypatch):
@@ -336,10 +339,11 @@ def test_consent_mode_is_testing_until_the_owner_says_otherwise(monkeypatch):
 
 def test_an_application_added_after_the_last_scan_gets_its_earlier_mail_read(db, monkeypatch):
     watermark = NOW - timedelta(days=1)
-    connect(db, last_synced_at=watermark)
+    # Already scanned under the current rules, so this is an ordinary top-up.
+    connect(db, last_synced_at=watermark, scan_version=gs.SCAN_VERSION)
     track(db, record_id="old", created_at=NOW - timedelta(days=30))
     seen = []
-    monkeypatch.setattr(gs, "fetch_recent_messages", lambda _, since: seen.append(since) or [])
+    monkeypatch.setattr(gs, "fetch_recent_messages", lambda _, since, *__: seen.append(since) or [])
 
     gs.sync_user(USER)
     assert seen[-1].replace(tzinfo=timezone.utc) - watermark < timedelta(seconds=1)

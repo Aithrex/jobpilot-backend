@@ -611,3 +611,58 @@ def _feedback_view(d: dict) -> dict:
         "created_at": _iso(d.get("created_at")),
         "responded_at": _iso(d.get("responded_at")),
     }
+
+
+# ------------------------------------------------------------------
+# Gmail access. While Google's consent screen is in Testing, only addresses on
+# Google's test-user list can connect Gmail, and only the owner can add one, by
+# hand, in Google Cloud. These routes keep the app's copy of that list
+# (services/gmail_access_service.py). They never talk to Google.
+# ------------------------------------------------------------------
+@admin_bp.route("/gmail-access", methods=["GET"])
+@admin_required
+def gmail_access_overview():
+    from services import gmail_access_service
+    try:
+        return jsonify(gmail_access_service.overview()), 200
+    except Exception as e:
+        logger.exception("gmail access overview error: %s", e)
+        return jsonify({"error": "Could not load Gmail access requests."}), 500
+
+
+def _gmail_access_change(action):
+    from services import gmail_access_service
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected a JSON object."}), 400
+    google_email, user_email = data.get("google_email"), data.get("user_email")
+    for value in (google_email, user_email):
+        if value is not None and not isinstance(value, str):
+            return jsonify({"error": "Addresses must be text."}), 400
+    try:
+        if action == "approve":
+            result = gmail_access_service.approve(
+                get_jwt_identity(), google_email=google_email, user_email=user_email)
+        else:
+            result = {"removed": gmail_access_service.remove(
+                google_email=google_email, user_email=user_email)}
+        return jsonify({**result, **gmail_access_service.overview()}), 200
+    except gmail_access_service.GmailAccessError as e:
+        return jsonify({"error": str(e), "code": e.code}), 400
+    except Exception as e:
+        logger.exception("gmail access %s error: %s", action, e)
+        return jsonify({"error": "That change could not be saved."}), 500
+
+
+@admin_bp.route("/gmail-access/approve", methods=["POST"])
+@admin_required
+def gmail_access_approve():
+    """Body: {user_email} to approve a request, or {google_email} to record an
+    address added at Google ahead of any request."""
+    return _gmail_access_change("approve")
+
+
+@admin_bp.route("/gmail-access/remove", methods=["POST"])
+@admin_required
+def gmail_access_remove():
+    return _gmail_access_change("remove")

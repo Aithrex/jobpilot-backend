@@ -19,6 +19,9 @@ ENV = {
     "GOOGLE_OAUTH_REDIRECT_URI": "https://app.test/oauth/gmail/callback",
     "GMAIL_TOKEN_ENCRYPTION_KEY": "test-key",
     "GMAIL_OAUTH_ENABLED": "true",
+    # These tests are about the Google round trip. Who is let in while Google
+    # limits the app to listed accounts is tests/test_gmail_access.py.
+    "GMAIL_ACCESS_GATE": "open",
 }
 
 

@@ -323,3 +323,133 @@ older than `GMAIL_AUTO_SYNC_HOURS` (default 6). It skips connections that need
 a reconnect, users with no tracked applications, and users who have not signed
 in for `GMAIL_AUTO_SYNC_ACTIVE_DAYS` (default 30). `GMAIL_AUTO_SYNC_ENABLED=false`
 turns it off without touching manual sync.
+
+## Application mail only, access by invitation, stage history (2026-11-16)
+
+Three changes, all additive on the wire.
+
+### Why the review queue timed out
+
+`GET /gmail/suggestions` and the count in `GET /gmail/status` check every
+waiting email against every tracked application. That check compiled a regular
+expression per application per email, and Python keeps only 512 compiled
+patterns, so past roughly 200 applications every one was rebuilt on every email.
+Measured on synthetic data: 420 applications and 150 waiting emails took 12.7 s
+for one request, over the client's 15 s limit once the page asked twice. The
+same request now takes 0.08 s, and the cost per email no longer depends on the
+size of the tracker (`evals/test_gmail_scan_corpus.py`
+`test_review_queue_cost_does_not_grow_with_the_size_of_the_tracker`).
+The client also waits 30 s for this one call and tries a second time by itself
+before it shows anything.
+
+### What a scan reads
+
+- **The search.** Gmail is asked for mail that uses hiring words
+  (`gmail_service._SEARCH_TERMS`: application, interview, recruiter, candidate,
+  offer, position, role ... plus `from:` each saved recruiter address), still
+  outside Promotions and Social, now with Spam and Trash stated explicitly
+  (`includeSpamTrash`), and never the user's own sent mail, drafts or chats.
+  Nothing else is opened. Google charges 60 quota units per full read against
+  6,000 per user per minute, so reading less is the only way a first scan gets
+  faster. `GMAIL_SCAN_SCOPE=all` restores the old search without a deploy.
+- **The text.** HTML-only mail is read as its reader saw it: stylesheets,
+  scripts and comments are dropped (a stylesheet alone used to fill the text
+  budget), entities and invisible padding are decoded before matching, the
+  part's declared charset is honoured, and a stub plain part no longer hides the
+  real HTML one. The quoted older message under a reply is removed; a forward
+  (nothing written above the quote) is kept whole.
+- **`SCAN_VERSION`.** A connection whose last finished scan used older rules
+  re-reads its whole window once (`scan_version` on the connection,
+  `scan_cursor_version` while a scan is in flight). Replays are safe for the
+  reasons already above.
+- **About an application, or not.** Naming a tracked company is no longer
+  enough. An email goes further only if it uses hiring vocabulary
+  (`_about_an_application`), or comes from a recruiter address saved on an
+  application. Loose words (role, position, job, opening) count only beside the
+  tracked role title. Order receipts, security alerts, newsletters, event
+  invitations, job alerts, "finish your application" reminders and candidate
+  surveys write nothing.
+- **Who it is from.** "Acme Recruiting <no-reply@greenhouse-mail.io>" and
+  `acme@myworkday.com` now identify the employer when the subject and body do
+  not repeat the name. A From name counts as the employer's own word only on a
+  hiring platform or the employer's own domain.
+- **Role titles.** "thank you for your interest in the Data Engineer role"
+  used to yield a second phantom role ("your interest in the data engineer"),
+  which capped every such email at review. Captures are trimmed to the title.
+  "applying to the X role" (Lever, Ashby) is recognised.
+- **Outcomes.**
+  - A decline is `strong` (an explicit decision, applied at 0.97),
+    `corroborated` (two soft phrases, or one beside a closing line, 0.93) or
+    `weak` (one soft phrase such as "unfortunately, we", 0.85: asked, never
+    applied). Soft wording beside rescheduling words is not a decline at all.
+  - A phrase that follows "if" or "should" in its own sentence is never an
+    outcome ("if you are selected for an interview, we will schedule a call").
+  - An offer must name what is offered. "Pleased to offer you the opportunity
+    to interview" and "any offer of employment is contingent on" are not offers.
+  - Interview wording inside the same email as the receipt is asked about
+    (0.80) unless it is a scheduling or assessment link. A video-call link
+    counts only beside interview words.
+  - A confirmed withdrawal is `withdrawn` (0.95), not `rejected`.
+  - "Acme viewed your application" is a receipt.
+- **"No application matches".** Kept only for mail that shows the user applied
+  (a receipt, a decline, an offer or a withdrawal).
+- **Unchanged on purpose:** an email that carries a requisition number the
+  tracked application cannot confirm is still asked about, never applied.
+- **Stored rows.** A review row written before these rules (`scan_version`
+  absent) is hidden when its kept subject and excerpt never mention hiring. It
+  is not deleted, and the re-read marks it if it belongs.
+
+`last_sync_summary.skipped_own` counts messages left out because the user
+wrote them.
+
+**The measure.** `evals/gmail_scan_corpus.py` is a labelled mailbox of 52
+emails and 3 threads written the way the hiring systems send them (Greenhouse,
+Workday, Lever, Ashby, iCIMS, SmartRecruiters, LinkedIn, Indeed), with the
+look-alikes that share an inbox with them. `evals/test_gmail_scan_corpus.py`
+runs each through the real pipeline and fails on any wrong automatic move, any
+non-application mail in the review queue, any clear outcome that was not
+applied, and any usable email the search would not return. Before this change
+14 of the first 47 checks failed, including the default Greenhouse, Lever,
+Ashby and LinkedIn declines. The corpus is invented text, not real mail: it
+proves the rules against the wording we know, not against every inbox.
+
+### Who may connect: `access`
+
+While Google's consent screen is in Testing, only addresses on Google's
+test-user list pass it (at most 100), and nobody but the owner can add one. A
+person who is not listed is stopped on Google's page with no way back. The app
+now asks first (`services/gmail_access_service.py`, collection `gmail_access`).
+
+`GET /gmail/status` `access` gains:
+
+| Field | Meaning |
+|---|---|
+| `gate` | `invite` (ask first) or `open`. Follows `GOOGLE_OAUTH_CONSENT_MODE`; `GMAIL_ACCESS_GATE` overrides. |
+| `state` | `none`, `requested` or `approved`. Always `approved` when the gate is open, and for anyone who already holds a connection. |
+| `google_email` | The Google account asked for. It is sent to Google as `login_hint`. |
+| `requested_at`, `decided_at` | ISO, when known. |
+
+- `POST /gmail/access-request` `{google_email?}` records the request (the
+  account address when omitted) and answers `{access}`. 400
+  `gmail_address_invalid`, 429 `rate_limited`, 503 `gmail_unavailable`.
+- `GET /gmail/auth-url` answers **403 `gmail_access_required`** (never 401)
+  until the person is `approved`.
+- Owner, `@admin_required`: `GET /api/admin/gmail-access` (who is waiting, who
+  is added, `used` of `limit`), `POST /api/admin/gmail-access/approve`
+  `{user_email}` or `{google_email}` (records that the address is on Google's
+  list, and emails the person), `POST /api/admin/gmail-access/remove`.
+  These never talk to Google: there is no API for the test-user list.
+
+A client that ignores `gate` behaves as before and meets the 403 on Connect.
+
+### Stage history: `application.stage_dates`
+
+`application.stage_dates.<status>` is the first time an application reached
+each stage (`services/application_stages.py`), written with `$min` by the
+tracker's PATCH, by Gmail (dated by the email, not by the sync) and by the
+managed mailbox. Undo removes only the date its own move wrote. List rows and
+the PATCH answer carry it as ISO with an offset. The tracker's analytics count
+an application for every stage it reached; rows from before this fall back to
+their current status. The tracker no longer calls
+`/career-copilot/intelligence/funnel` (which asked a model for a paragraph on
+every open) or `/intelligence/stale`; both routes remain for other callers.
