@@ -187,3 +187,139 @@ dates, scan continuation, failed message fetches, quota backoff and deadlines,
 preserved cursors after partial fetch failures, API validation, and slim-list
 paging. All fixtures use the repository's mongomock guard. No live mailbox or
 database is required.
+
+## Sync runs, reconnect, activity and undo (2026-11-15)
+
+Everything here is additive. Old clients keep working.
+
+### One press, one run
+
+`POST /api/resume/gmail/sync` starts a **run**. A run reads batch after batch
+until the mailbox window is finished. The work is cut into job slices of about
+90 seconds so a deploy never waits on it; each slice starts the next one. If a
+slice cannot start the next (a deploy, a crash), the run is `paused` and the
+scheduled sync (`gmail_sync`, every 30 minutes) continues it.
+
+Response `202 {ok, job_id, run_id, status: "started"}`. If a run is already
+active the answer is `202 {ok, run_id, status: "running", already_running: true}`
+and no second run starts. Failures carry a `code`:
+
+| status | code | meaning |
+|---|---|---|
+| 400 | `gmail_not_connected` | no connection |
+| 409 | `gmail_reconnect_required` | Google no longer accepts the saved access |
+| 429 | `rate_limited` | more than 6 starts in 5 minutes |
+| 503 | `gmail_unavailable` | switched off or not configured |
+
+Progress is read from **`GET /api/resume/gmail/status`**, not from the job.
+`?light=1` skips the review count (`pending_suggestions: null`) for polling.
+
+### Status
+
+```
+{
+  configured, connected, gmail_address, linked_at, last_synced_at,
+  pending_suggestions, has_more, last_sync_summary,
+  state: "unavailable" | "not_connected" | "needs_reconnect" | "never_synced"
+       | "syncing" | "paused" | "synced",
+  needs_reconnect: bool,
+  reconnect_reason: "expired_or_revoked" | "permission_missing" | null,
+  tracked_applications: int,
+  sync: null | {
+    run_id, trigger: "manual" | "scheduled",
+    state: "running" | "paused" | "completed" | "failed",
+    started_at, updated_at, finished_at,
+    batches, messages_scanned, auto_applied, suggested, deferred, ignored,
+    outcome, error_code, error
+  },
+  auto_sync: {enabled: bool, interval_hours: int},
+  access: {mode: "testing" | "production", expires_at: iso | null}
+}
+```
+
+`state` is the one field a client needs to choose a screen:
+
+- `unavailable`: not configured (credentials, the encryption key, or the
+  `GMAIL_OAUTH_ENABLED` switch).
+- `needs_reconnect`: the saved access was rejected. Only a new consent fixes it.
+- `never_synced`: connected, no finished run.
+- `syncing`: a run is reading mail now. `sync` carries the running totals.
+- `paused`: mail remains and no slice is running. It continues by itself.
+- `synced`: the last run finished. `last_sync_summary` is that run's totals.
+
+`sync.outcome` and `last_sync_summary.outcome` say why a finished run ended the
+way it did:
+
+| outcome | meaning |
+|---|---|
+| `no_applications` | the tracker is empty, so no mail was read |
+| `no_mail` | no new mail in the window |
+| `no_matches` | mail was read, none matched a tracked application |
+| `up_to_date` | matching mail agreed with the tracker already |
+| `updated` | at least one status moved or one item needs review |
+
+`last_sync_summary` also carries `tracked_applications` and, for a first scan,
+`window_days` (60).
+
+`access.mode` comes from `GOOGLE_OAUTH_CONSENT_MODE` (`testing` unless set to
+`production`). In testing mode Google ends every connection 7 days after
+consent, so `access.expires_at` is `linked_at + 7 days`. It is null in
+production mode.
+
+### Error codes on a failed run
+
+`sync.error_code` (and the job's `error_code`): `gmail_reconnect_required`,
+`gmail_rate_limited`, `gmail_unavailable`, `gmail_policy_blocked`,
+`gmail_time_limit`, `gmail_error`. `sync.error` is always a sentence written
+for the user. Provider bodies and exception text never reach a response.
+
+### Callback
+
+`POST /api/resume/gmail/callback` still needs the signed-in user: the state is
+bound to the account that asked for it, and that check is what stops a consent
+link sent to someone else from attaching their mailbox to the sender's account.
+Failures are `400` with a `code` and a sentence, never a raw exception and
+never 401 for a Google problem:
+
+| code | meaning |
+|---|---|
+| `missing_params` | no code or state |
+| `state_invalid` | expired, used, or issued to another account |
+| `code_rejected` | Google refused the code (expired or reused) |
+| `permission_missing` | the Gmail read box was not ticked on Google's screen |
+| `no_refresh_token` | Google returned no long-lived access |
+| `gmail_unavailable` (503) | switched off or not configured |
+
+### What a sync changed, and undo
+
+`GET /api/resume/gmail/activity?limit=20` returns the automatic moves of the
+last 30 days, newest first:
+
+```
+{changes: [{
+  suggestion_id, record_id, company, title,
+  from_status, to_status, subject, from_address, email_received_at,
+  applied_at, sync_run_id, undoable: bool, undone: bool
+}]}
+```
+
+`POST /api/resume/gmail/suggestions/<id>/undo` puts the application back to
+`from_status`. It only works for an automatic move, and only while the
+application still holds the status Gmail gave it:
+
+- `200 {suggestion, restored_status}`
+- `404` unknown suggestion
+- `409 {code: "not_undoable"}` not an automatic move, or already undone
+- `409 {code: "status_changed"}` the status was changed again afterwards
+
+An undone email is never applied automatically again; the undo counts as the
+user's own status change, which later evidence must be newer than.
+
+### Scheduled sync
+
+The worker's `gmail_sync` job (every 30 minutes, inline, one user at a time)
+syncs connections that are due: an unfinished run, or a last finished scan
+older than `GMAIL_AUTO_SYNC_HOURS` (default 6). It skips connections that need
+a reconnect, users with no tracked applications, and users who have not signed
+in for `GMAIL_AUTO_SYNC_ACTIVE_DAYS` (default 30). `GMAIL_AUTO_SYNC_ENABLED=false`
+turns it off without touching manual sync.

@@ -38,8 +38,11 @@ CATCH_UP_SECONDS = 600
 # it is BOARD_REFRESH_MINUTES (30) old; the 10-minute tick only bounds how late.
 # logo_refresh fetches company icons that are due (never fetched, or missed
 # under an older resolver) inside a 4-minute budget (company_logo_service).
+# gmail_sync reads new mail for connected users whose last finished scan is
+# GMAIL_AUTO_SYNC_HOURS (6) old, and continues any scan a deploy interrupted
+# (gmail_service.sync_due). The 30-minute tick only bounds how late.
 EVERY = {"digest_hourly": 60, "learning_due": 10, "board_refresh": 10,
-         "logo_refresh": 15}
+         "logo_refresh": 15, "gmail_sync": 30}
 DAILY = {
     "bandit_nightly": (3, 0),
     "trend_aggregate": (4, 0),
