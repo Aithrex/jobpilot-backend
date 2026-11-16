@@ -249,6 +249,9 @@ def test_an_automatic_interview_move_the_rules_no_longer_support_is_put_back(sca
     assert statuses["vandelay-backend"] == "applied"
     row = current_db().gmail_suggestions.find_one({"_id": "old-move"})
     assert row["undone"] is True and row["retracted_by_rules"] is True
+    activity = {a["suggestion_id"]: a for a in gs.list_activity(USER)}
+    assert activity["old-move"]["undone"] and activity["old-move"]["corrected"], \
+        "the person sees it was put back by a closer read, not by them"
 
 
 def test_a_card_the_person_changed_since_is_left_alone(scan):

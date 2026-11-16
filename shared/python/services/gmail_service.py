@@ -3244,6 +3244,8 @@ def list_activity(user_email: str, limit: int = 20) -> List[Dict[str, Any]]:
             "email_received_at": d.get("email_received_at"),
             "applied_at": _iso(d.get("applied_at")), "sync_run_id": d.get("sync_run_id"),
             "undone": undone,
+            # Put back by a later, stricter read of the same email, not by the person.
+            "corrected": bool(d.get("retracted_by_rules")),
             "undoable": not undone and current.get(d.get("record_id")) == d.get("suggested_status"),
         })
     return changes
