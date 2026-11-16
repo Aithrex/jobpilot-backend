@@ -276,6 +276,39 @@ EMAILS: List[Dict[str, Any]] = [
          expect=("auto", "acme-mle", "interviewing"),
          note="a real invitation that also mentions the talent community"),
 
+    # ── Look-alikes of an interview (2026-11-16, an applied card showed
+    #    "Interviewing"). Each sentence that fired before is boilerplate. ────
+    mail("F1", "Vandelay Careers <careers@vandelay.test>", "Your Backend Engineer application",
+         "Hi Priya,\n\nThank you for your interest in the Backend Engineer role at Vandelay Industries. "
+         "We are reviewing your application. A recruiter will reach out to schedule a call if your "
+         "background is a match.",
+         expect=("not", "interviewing"), note="the condition comes after the phrase"),
+    mail("F2", "Massive Dynamic Careers <careers@massivedynamic.test>", "Software Engineer at Massive Dynamic",
+         "Hi Priya,\n\nHere is what to expect for the Software Engineer role at Massive Dynamic. Our "
+         "process includes a phone screen with a recruiter, then a technical interview with the team.",
+         expect=("not", "interviewing"), note="a description of the process, not an event"),
+    mail("F3", "Initech Recruiting <no-reply@initech.test>", "Initech DevOps Engineer application",
+         "Thank you for your interest in the DevOps Engineer role at Initech. Only candidates selected "
+         "for the next step of the process will be contacted.",
+         expect=("not", "interviewing"), note="other candidates being selected"),
+    mail("F4", "Wonka Careers <careers@wonka.test>", "Supply Chain Analyst at Wonka",
+         "Thanks for your interest in Wonka and the Supply Chain Analyst role! Let's connect: follow "
+         "us on LinkedIn for new roles.",
+         expect=("not", "interviewing"), note="a social plug"),
+    mail("F5", "Stark Industries Careers <careers@starkindustries.test>", "Systems Engineer application",
+         "Thank you for applying to the Systems Engineer role at Stark Industries. Learn about our "
+         "interview process and explore our teams: https://starkindustries.test/careers/teams/cloud",
+         expect=("not", "interviewing"), note="a careers page path that contains 'teams/'"),
+    mail("I9", "Elaine Benes <elaine@vandelay.test>", "Vandelay Backend Engineer, next round",
+         "Hi Priya,\n\nGreat news! We would like to move you forward to the next round of interviews "
+         "for the Backend Engineer role at Vandelay Industries.\n\nElaine",
+         expect=("auto", "vandelay-backend", "interviewing"), note="being moved on, said to you"),
+    mail("I10", "Peter Bishop <peter@massivedynamic.test>", "Massive Dynamic Senior Software Engineer",
+         "Hi Priya,\n\nThanks for your time so far on the Senior Software Engineer role at Massive "
+         "Dynamic. I'd like to schedule a 45 minute technical conversation. Let me know if Tuesday or "
+         "Wednesday works.\n\nPeter",
+         expect=("auto", "massive-senior", "interviewing"), note="'if Tuesday works' is not a selection condition"),
+
     # ── Real application mail the tracker cannot place by itself ────────────
     mail("U1", "Acme Recruiting <no-reply@us.greenhouse-mail.io>", "Your application to Acme",
          "Thank you for your interest in the Senior Staff Engineer role at Acme. Your application for "

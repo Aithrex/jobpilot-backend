@@ -55,7 +55,7 @@ def scan(monkeypatch):
     """Returns run(emails) -> (statuses by record, pending review rows, summary)."""
     db = current_db()
 
-    def run(emails):
+    def run(emails, before=None):
         for name in ("gmail_connections", "gmail_suggestions", "tailoring_records", "applications"):
             db[name].delete_many({})
         db.gmail_connections.insert_one({"user_email": USER, "gmail_address": corpus.ME,
@@ -65,6 +65,8 @@ def scan(monkeypatch):
                 "user_email": USER, "record_id": record_id, "created_at": NOW - timedelta(days=20),
                 "jd_analysis": {"company": company, "job_title": title},
                 "application": {"status": status}})
+        if before:
+            before(db)
         by_id = {item["id"]: _gmail_json(item) for item in emails}
 
         def gmail(path, access, params=None, raise_on_error=False, **_):
@@ -223,3 +225,38 @@ def test_review_queue_cost_does_not_grow_with_the_size_of_the_tracker():
     small, large = cost(40, 40), cost(600, 150)
     assert large < 0.02, f"{large * 1000:.1f} ms per waiting email with 600 applications"
     assert large < small * 8 + 0.002, "cost per email grew with the tracker"
+
+
+def _old_interview_move(at, touched=None):
+    """The card was moved to interviewing by itself off email F1 under the old
+    rules; `touched` is when the person last changed it, if after."""
+    def before(db):
+        db.tailoring_records.update_one({"record_id": "vandelay-backend"}, {"$set": {
+            "application.status": "interviewing", "application.updated_at": touched or at,
+            "application.gmail_updated_at": at}})
+        db.gmail_suggestions.insert_one({
+            "_id": "old-move", "suggestion_id": "old-move", "user_email": USER,
+            "record_id": "vandelay-backend", "gmail_message_id": "F1", "evidence_message_id": "F1",
+            "supporting_message_ids": ["F1"], "current_status": "applied",
+            "suggested_status": "interviewing", "auto_applied": True, "applied": True,
+            "applied_at": at, "dismissed": False, "created_at": at})
+    return before
+
+
+def test_an_automatic_interview_move_the_rules_no_longer_support_is_put_back(scan):
+    f1 = next(e for e in corpus.EMAILS if e["id"] == "F1")
+    statuses, _, _ = scan([f1], before=_old_interview_move(NOW - timedelta(days=1)))
+    assert statuses["vandelay-backend"] == "applied"
+    row = current_db().gmail_suggestions.find_one({"_id": "old-move"})
+    assert row["undone"] is True and row["retracted_by_rules"] is True
+    activity = {a["suggestion_id"]: a for a in gs.list_activity(USER)}
+    assert activity["old-move"]["undone"] and activity["old-move"]["corrected"], \
+        "the person sees it was put back by a closer read, not by them"
+
+
+def test_a_card_the_person_changed_since_is_left_alone(scan):
+    f1 = next(e for e in corpus.EMAILS if e["id"] == "F1")
+    at = NOW - timedelta(days=2)
+    statuses, _, _ = scan([f1], before=_old_interview_move(at, touched=at + timedelta(days=1)))
+    assert statuses["vandelay-backend"] == "interviewing"
+    assert not current_db().gmail_suggestions.find_one({"_id": "old-move"}).get("undone")

@@ -417,23 +417,32 @@ proves the rules against the wording we know, not against every inbox.
 
 While Google's consent screen is in Testing, only addresses on Google's
 test-user list pass it (at most 100), and nobody but the owner can add one. A
-person who is not listed is stopped on Google's page with no way back. The app
-now asks first (`services/gmail_access_service.py`, collection `gmail_access`).
+person who is not listed is stopped on Google's page with no way back
+(`services/gmail_access_service.py`, collection `gmail_access`).
+
+**2026-11-16, connect first (`try`, the default in Testing).** Most people who
+press Connect are already on the list, so everyone is offered Connect. Each
+press is remembered (`attempted_at`, kept 72 hours). A person who comes back
+without a connection is offered **Ask for access**, which records `requested`
+and emails `GMAIL_ACCESS_NOTIFY_EMAIL` (default harshith@aithrex.tech).
+`invite` keeps the older ask-first flow.
 
 `GET /gmail/status` `access` gains:
 
 | Field | Meaning |
 |---|---|
-| `gate` | `invite` (ask first) or `open`. Follows `GOOGLE_OAUTH_CONSENT_MODE`; `GMAIL_ACCESS_GATE` overrides. |
+| `gate` | `try` (connect first, ask if Google stops you; default in Testing), `invite` (ask first) or `open` (production). `GMAIL_ACCESS_GATE` overrides. |
 | `state` | `none`, `requested` or `approved`. Always `approved` when the gate is open, and for anyone who already holds a connection. |
 | `google_email` | The Google account asked for. It is sent to Google as `login_hint`. |
 | `requested_at`, `decided_at` | ISO, when known. |
+| `attempted_at` | ISO of the last Connect press in the last 72 hours that has not produced a connection, `try` gate only. The client offers Ask for access while it is set. |
 
 - `POST /gmail/access-request` `{google_email?}` records the request (the
   account address when omitted) and answers `{access}`. 400
   `gmail_address_invalid`, 429 `rate_limited`, 503 `gmail_unavailable`.
 - `GET /gmail/auth-url` answers **403 `gmail_access_required`** (never 401)
-  until the person is `approved`.
+  under the `invite` gate until the person is `approved`. Under `try` and
+  `open` it always answers the URL; under `try` it records the attempt.
 - Owner, `@admin_required`: `GET /api/admin/gmail-access` (who is waiting, who
   is added, `used` of `limit`), `POST /api/admin/gmail-access/approve`
   `{user_email}` or `{google_email}` (records that the address is on Google's

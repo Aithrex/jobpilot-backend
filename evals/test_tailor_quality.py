@@ -363,7 +363,7 @@ def test_offline_scores_and_coverage(name, resume, jd, offline_tailor, capsys):
     from services.resume_renderer import ResumeRenderer
     pdf, resolution = ResumeRenderer().generate_pdf(tailored)
     scores = ResumeScorer().score(
-        tailored, jd, pdf_bytes=pdf, page_outcome=resolution.outcome,
+        tailored, jd, pdf_bytes=pdf, page_outcome=resolution.outcome, source_resume=resume,
     )
     gap = KeywordGapEngine().analyze(tailored, jd)
 
@@ -373,9 +373,17 @@ def test_offline_scores_and_coverage(name, resume, jd, offline_tailor, capsys):
               f"quantified={scores.get('quantified_impact')} "
               f"req_coverage={gap.get('required_coverage')}%")
 
-    # Floors that must hold for EVERY profession (not just SWE): the pipeline
-    # produces a parseable, complete, well-scored resume.
-    assert scores.get("overall", 0) >= 75, f"[{name}] overall too low: {scores.get('overall')}"
+    # Floors that must hold for EVERY profession (not just SWE). `overall` is
+    # the strict ATS score (services/ats_score.py, ats-1.0): a skill only in
+    # the skills list earns 0.3 of its credit, so the offline tailor (no model,
+    # no rewrites) cannot lift these fixtures to the top band. What it must do:
+    # never make a resume score worse, keep every golden fit at least "Fair",
+    # and never produce a PDF an ATS cannot read.
+    ats = scores.get("ats") or {}
+    before = (scores.get("ats_before") or {}).get("score")
+    assert scores.get("overall", 0) >= 55, f"[{name}] overall too low: {scores.get('overall')} {ats.get('held_back_by')}"
+    assert before is None or scores["overall"] >= before, f"[{name}] tailoring lowered the score: {before} -> {scores['overall']}"
+    assert not any(c.get("key") == "readable" for c in ats.get("caps") or []), f"[{name}] not readable: {ats.get('caps')}"
     assert scores.get("section_completeness", 0) >= 80, f"[{name}] incomplete"
     # ats_parseability requires a real PDF render (pypdf round-trip); offline
     # evals run without a renderer so the key is absent (defaults to 0).

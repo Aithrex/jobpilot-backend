@@ -13,11 +13,19 @@ Google:
   requested  asked; waiting for the owner to add the address at Google
   approved   the owner added the address at Google and recorded it here
 
-Connect is offered only to `approved`, and to anyone who already holds a
-connection (they were on Google's list before this existed).
+Three gates:
 
-The gate is `invite` while GOOGLE_OAUTH_CONSENT_MODE is `testing` and `open`
-once it is `production`. GMAIL_ACCESS_GATE=open|invite overrides either way.
+  try     (default while GOOGLE_OAUTH_CONSENT_MODE is `testing`) Connect is
+          offered to everyone. Most people who try are already on Google's
+          list. Whoever Google stops comes back without a connection; the
+          app saw the attempt (`attempted_at`) and offers "Ask for access",
+          which records `requested` and emails the owner.
+  invite  ask first: Connect only for `approved`, and for anyone who already
+          holds a connection (they were on Google's list before this existed).
+  open    once the consent screen is in `production`: everyone, no list.
+
+GMAIL_ACCESS_GATE=try|invite|open overrides the default. Owner notices go to
+GMAIL_ACCESS_NOTIFY_EMAIL (default harshith@aithrex.tech; `off` silences them).
 Nothing here talks to Google: there is no API for the test-user list.
 
 Collection: `gmail_access`, one row per person or per pre-approved address.
@@ -36,6 +44,12 @@ from utils.db_connect import DBConnect
 logger = logging.getLogger(__name__)
 
 STATES = ("none", "requested", "approved")
+GATES = ("try", "invite", "open")
+# Who hears about each request. The owner keeps Google's test-user list.
+DEFAULT_NOTIFY_EMAIL = "harshith@aithrex.tech"
+# How long after a Connect press that came back empty the app keeps offering
+# "Ask for access" up front.
+ATTEMPT_WINDOW_HOURS = 72
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}")
 
 
@@ -90,12 +104,13 @@ def normalize_address(value: Any) -> Optional[str]:
 
 
 def gate() -> str:
-    """`invite` (ask first) or `open` (anyone may start Google's screen)."""
+    """`try` (connect first, ask if Google stops you), `invite` (ask first) or
+    `open` (no list at all)."""
     raw = (_get_config_value("GMAIL_ACCESS_GATE", "") or "").strip().lower()
-    if raw in ("open", "invite"):
+    if raw in GATES:
         return raw
     from services import gmail_service
-    return "open" if gmail_service.consent_mode() == "production" else "invite"
+    return "open" if gmail_service.consent_mode() == "production" else "try"
 
 
 def seat_limit() -> int:
@@ -107,12 +122,25 @@ def seat_limit() -> int:
         return 100
 
 
-def _public(row: Optional[Dict[str, Any]], state: str, current_gate: str) -> Dict[str, Any]:
+def _recent_attempt(row: Optional[Dict[str, Any]]) -> Optional[str]:
+    """When this person last pressed Connect, if that was recent."""
+    at = (row or {}).get("last_attempt_at")
+    if not isinstance(at, datetime):
+        return None
+    at = at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+    if (_now() - at).total_seconds() > ATTEMPT_WINDOW_HOURS * 3600:
+        return None
+    return at.isoformat()
+
+
+def _public(row: Optional[Dict[str, Any]], state: str, current_gate: str,
+            attempt_row: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     row = row or {}
     return {"gate": current_gate, "state": state,
             "google_email": row.get("google_email") if state != "none" else None,
             "requested_at": _iso(row.get("requested_at")),
-            "decided_at": _iso(row.get("decided_at")) if state == "approved" else None}
+            "decided_at": _iso(row.get("decided_at")) if state == "approved" else None,
+            "attempted_at": _recent_attempt(attempt_row if attempt_row is not None else row)}
 
 
 def access_for(user_email: str, has_connection: bool = False) -> Dict[str, Any]:
@@ -126,18 +154,39 @@ def access_for(user_email: str, has_connection: bool = False) -> Dict[str, Any]:
     if has_connection:
         # Connected before the gate existed, so already on Google's list.
         return _public(row, "approved", current_gate) | {
-            "google_email": (row or {}).get("google_email")}
+            "google_email": (row or {}).get("google_email"), "attempted_at": None}
     # The owner may have recorded the address before the person asked.
     listed = _rows().find_one({"google_email": user_email.strip().lower(), "state": "approved"})
     if listed and not (row and row.get("google_email") not in (None, listed["google_email"])):
-        return _public(listed, "approved", current_gate)
+        return _public(listed, "approved", current_gate, attempt_row=row)
     if row and row.get("state") == "requested":
         return _public(row, "requested", current_gate)
-    return _public(None, "none", current_gate)
+    return _public(None, "none", current_gate, attempt_row=row)
 
 
 def may_connect(user_email: str, has_connection: bool = False) -> bool:
+    """`try` and `open` send everyone to Google; `invite` only the approved."""
+    if gate() in ("try", "open"):
+        return True
     return access_for(user_email, has_connection)["state"] == "approved"
+
+
+def record_attempt(user_email: str) -> None:
+    """Remember a Connect press, so a person Google stops is offered "Ask for
+    access" when they come back. Best effort: never blocks the sign-in."""
+    if gate() != "try":
+        return
+    try:
+        _ensure_indexes()
+        now = _now()
+        _rows().update_one(
+            {"user_email": user_email},
+            {"$set": {"last_attempt_at": now},
+             "$setOnInsert": {"state": "none", "google_email": None, "requested_at": None,
+                              "created_at": now}},
+            upsert=True)
+    except Exception as e:  # pragma: no cover
+        logger.warning("gmail connect attempt not recorded: %s", type(e).__name__)
 
 
 def login_hint(user_email: str) -> Optional[str]:
@@ -180,13 +229,19 @@ def request_access(user_email: str, google_email: Any) -> Dict[str, Any]:
 
 def _notify_owner(user_email: str, address: str) -> None:
     """Tell the person who keeps Google's list. Best effort, never fatal."""
-    to = normalize_address(_get_config_value("GMAIL_ACCESS_NOTIFY_EMAIL", "") or "")
+    raw = (_get_config_value("GMAIL_ACCESS_NOTIFY_EMAIL", "") or "").strip()
+    if raw.lower() in ("off", "none", "false", "0"):
+        return
+    to = normalize_address(raw or DEFAULT_NOTIFY_EMAIL)
     if not to:
         return
     try:
         from services import email_service
         waiting = _rows().count_documents({"state": "requested"})
-        text = ("A person asked for Gmail updates.\n\n"
+        lead = ("A person could not connect Gmail and asked for access. While the app is in "
+                "Testing, Google lets only listed test users through.\n\n"
+                if gate() == "try" else "A person asked for Gmail updates.\n\n")
+        text = (lead +
                 f"Google address to add: {address}\nAspirely account: {user_email}\n"
                 f"Waiting in total: {waiting}\n\n"
                 "1. Google Cloud > Google Auth Platform > Audience > Test users > Add users.\n"

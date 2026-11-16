@@ -69,21 +69,23 @@ Google Cloud console, project of the Gmail OAuth client, **Google Auth
 Platform > Audience > Test users**. Add the Google account of every person who
 should be able to connect. Remove nobody who is connected.
 
-Since 2026-11-16 the app keeps its own copy of this list, so people ask
-before they are sent to Google:
+Since 2026-11-16 everyone sees **Connect Gmail** (`GMAIL_ACCESS_GATE` unset
+means `try`). A person Google stops comes back to the tracker and is offered
+**Ask for access**:
 
-1. A person presses **Request access** in the tracker and gives the Google
-   address they will connect. If `GMAIL_ACCESS_NOTIFY_EMAIL` is set, that
-   address gets an email.
+1. They give the Google address they will connect. The request is emailed to
+   `GMAIL_ACCESS_NOTIFY_EMAIL` (default harshith@aithrex.tech, `off` silences it).
 2. **Admin portal > Gmail access** lists who is waiting. Copy the address, add
    it under **Test users** in Google Cloud, then press **Mark as added**.
-3. The person is emailed, **Connect Gmail** appears for them, and Google's
-   screen opens on the account you added.
+3. The person is emailed, and Google's screen opens on the account you added
+   the next time they press Connect. Marking is optional under `try` (they can
+   connect as soon as Google lists them) but it sends that email.
 
 The panel shows places used out of 100 and refuses another approval at the
 cap. Use **Record an address you already added** for anyone on Google's list
 who has not asked in the app. Anyone already connected is let through without
-a record. `GMAIL_ACCESS_GATE=open` switches the asking off.
+a record. `GMAIL_ACCESS_GATE=invite` restores ask-first; `open` switches the
+asking off.
 
 Two things Google's pages say, worth knowing before the list fills:
 

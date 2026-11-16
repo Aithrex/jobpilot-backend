@@ -2591,12 +2591,16 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 render_error = f"PDF render failed: {e}"
 
             def _run_score(p: dict):
+                source = p.get("source_resume")
                 return svc.scorer.score(
                     p["tailored_resume"],
                     p["jd_analysis"],
                     pdf_bytes=pdf_bytes,
                     render_error=render_error,
                     page_outcome=None if resolution is None else resolution.outcome,
+                    # The resume it was tailored from, scored by the same rules,
+                    # so the person sees how far tailoring moved it.
+                    source_resume=source if isinstance(source, dict) else None,
                 )
 
             # Package 2: pin assessment-v2 policy on this job when enabled so a

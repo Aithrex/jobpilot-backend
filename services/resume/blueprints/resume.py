@@ -508,6 +508,11 @@ def ats_scores():
             "record_id": meta["record_id"],
             "version_id": meta["version_id"],
         }
+        # Optional: the resume this was tailored from, scored by the same
+        # rules so the result can show before and after (`ats_before`).
+        source_resume = data.get("source_resume")
+        if isinstance(source_resume, dict) and source_resume:
+            payload["source_resume"] = source_resume
         try:
             from services import assessment_service as _assess
             if _assess.enabled():
@@ -4291,9 +4296,8 @@ def gmail_auth_url():
     # Kill-switch: block the gmail.readonly consent flow independent of creds.
     if not gmail_service.gmail_oauth_enabled() or not gmail_service.gmail_configured():
         return _gmail_error(*_GMAIL_UNAVAILABLE, 503)
-    # While Google limits the app to listed accounts, only a person whose
-    # address the owner has added is sent to Google. Anyone else would be
-    # stopped on Google's own page with no way back. 403, never 401.
+    # Gate `invite`: only a person whose address the owner has added is sent
+    # to Google. Gates `try` and `open` send everyone. 403, never 401.
     try:
         from services import gmail_access_service
         allowed = gmail_access_service.may_connect(
@@ -4308,6 +4312,9 @@ def gmail_auth_url():
                             "gmail_access_required", 403)
     try:
         url = gmail_service.build_auth_url(user_email)
+        # Connect-first: if Google stops this person, the tracker offers
+        # "Ask for access" when they come back without a connection.
+        gmail_access_service.record_attempt(user_email)
         return jsonify({"auth_url": url}), 200
     except Exception as e:
         logger.exception("gmail auth-url error: %s", e)
