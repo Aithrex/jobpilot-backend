@@ -69,6 +69,33 @@ Google Cloud console, project of the Gmail OAuth client, **Google Auth
 Platform > Audience > Test users**. Add the Google account of every person who
 should be able to connect. Remove nobody who is connected.
 
+Since 2026-11-16 the app keeps its own copy of this list, so people ask
+before they are sent to Google:
+
+1. A person presses **Request access** in the tracker and gives the Google
+   address they will connect. If `GMAIL_ACCESS_NOTIFY_EMAIL` is set, that
+   address gets an email.
+2. **Admin portal > Gmail access** lists who is waiting. Copy the address, add
+   it under **Test users** in Google Cloud, then press **Mark as added**.
+3. The person is emailed, **Connect Gmail** appears for them, and Google's
+   screen opens on the account you added.
+
+The panel shows places used out of 100 and refuses another approval at the
+cap. Use **Record an address you already added** for anyone on Google's list
+who has not asked in the app. Anyone already connected is let through without
+a record. `GMAIL_ACCESS_GATE=open` switches the asking off.
+
+Two things Google's pages say, worth knowing before the list fills:
+
+- A test user "consumes a project's test user quota once added". The page does
+  not say removing one frees the place, so treat the 100 as spent when used.
+- An app that is **In production but not verified** is also capped at 100 new
+  users, counted "over the entire lifetime of the project", and shows an
+  "unverified app" screen before consent. The 7-day expiry is described only
+  for Testing. So publishing without verification would end the weekly
+  reconnect and the hand-adding, at the price of that warning screen and the
+  same ceiling. Confirm on the Audience page before choosing; it is your call.
+
 ### 3. Soon: publish the consent screen
 
 Same page, **Publishing status > Publish app** (Testing to In production).

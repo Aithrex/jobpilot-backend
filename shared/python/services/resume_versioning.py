@@ -226,6 +226,8 @@ def serialize_record(record: Dict[str, Any], include_full: bool = False) -> Dict
         dates = app.get("interview_dates")
         if isinstance(dates, list):
             app["interview_dates"] = [_iso_utc(d) for d in dates]
+        from services import application_stages
+        application_stages.serialize(app)
 
     # Interview prep — expose metadata in list view, full content in detail view
     prep = out.get("interview_prep")
@@ -294,6 +296,8 @@ def serialize_list_row(record: Dict[str, Any]) -> Dict[str, Any]:
         dates = app.get("interview_dates")
         if isinstance(dates, list):
             app["interview_dates"] = [_iso_utc(d) for d in dates]
+        from services import application_stages
+        application_stages.serialize(app)
         out["application"] = app
 
     return out

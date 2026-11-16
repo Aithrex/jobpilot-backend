@@ -355,6 +355,17 @@ INDEX_SPECS = [
     # gmail_service.list_activity: the automatic moves of the last 30 days.
     ("gmail_suggestions", [("user_email", ASCENDING), ("auto_applied", ASCENDING),
                            ("applied_at", DESCENDING)], {"name": "user_auto_applied_at"}),
+    # gmail_service.list_suggestions: the emails still waiting for the user,
+    # newest first. Read on every tracker open.
+    ("gmail_suggestions", [("user_email", ASCENDING), ("applied", ASCENDING),
+                           ("dismissed", ASCENDING), ("created_at", DESCENDING)],
+     {"name": "user_pending_created_at"}),
+    # gmail_access_service: who may connect Gmail while Google limits the app
+    # to listed test accounts. Read by user on every status call.
+    ("gmail_access", [("user_email", ASCENDING)], {"name": "user_email"}),
+    ("gmail_access", [("google_email", ASCENDING)], {"name": "google_email"}),
+    ("gmail_access", [("state", ASCENDING), ("requested_at", ASCENDING)],
+     {"name": "state_requested_at"}),
 
     # === password reset / login state (time-bounded) ======================
     # auth.py:412 find_one({token_hash}); :377 insert with expires_at.

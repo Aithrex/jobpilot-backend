@@ -83,6 +83,16 @@ AUTO_APPLY_CONFIDENCE = 0.92
 # https://developers.google.com/workspace/gmail/api/reference/quota
 MAX_MESSAGES_PER_SYNC = 50
 GMAIL_REQUEST_INTERVAL_SECONDS = 1.0
+# Bump when WHAT a scan reads, or HOW it reads it, changes. A connection whose
+# last finished scan is older re-reads its whole window once with the new
+# rules. Safe to replay: suggestion ids are deterministic, and evidence older
+# than what an application already holds never moves it.
+#   2 (2026-11-16): application mail only, HTML bodies read properly, replies
+#                   and the user's own sent mail left out.
+SCAN_VERSION = 2
+# Text kept per message for the rules. A decision sentence sits near the top;
+# this is room for a long greeting and a quoted job description.
+BODY_TEXT_LIMIT = 6000
 GMAIL_FETCH_BUDGET_SECONDS = 180.0
 GMAIL_MAX_REQUEST_ATTEMPTS = 7
 
@@ -301,6 +311,8 @@ def _ensure_indexes() -> None:
         _oauth_states().create_index("state", unique=True, name="state_unique")
         _suggestions().create_index([("user_email", 1), ("auto_applied", 1), ("applied_at", -1)],
                                     name="user_auto_applied_at")
+        _suggestions().create_index([("user_email", 1), ("applied", 1), ("dismissed", 1), ("created_at", -1)],
+                                    name="user_pending_created_at")
     except Exception as e:  # pragma: no cover - an index must never block a connect
         logger.warning("gmail index setup skipped: %s", type(e).__name__)
 
@@ -333,6 +345,16 @@ def build_auth_url(user_email: str) -> str:
         "prompt": "consent",  # ensure refresh_token is returned even on re-link
         "state": state,
     }
+    # While the consent screen is in Testing only the address the owner added
+    # at Google can pass it. Preselect that account; picking another one there
+    # ends on Google's "Access blocked" page.
+    try:
+        from services import gmail_access_service
+        hint = gmail_access_service.login_hint(user_email)
+        if hint:
+            params["login_hint"] = hint
+    except Exception as e:  # pragma: no cover - a hint must never block a connect
+        logger.warning("gmail login hint skipped: %s", type(e).__name__)
     from urllib.parse import urlencode
     return f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
 
@@ -472,9 +494,9 @@ def store_connection(user_email: str, token_payload: Dict[str, Any]) -> Dict[str
     _connections().update_one(
         {"user_email": user_email},
         {"$set": doc, "$unset": {key: "" for key in (
-            "scan_next_page_token", "scan_query", "scan_before", "last_sync_summary",
-            "sync_lock_id", "sync_lock_until", "needs_reconnect", "reconnect_reason",
-            "reconnect_at", "sync_run",
+            "scan_next_page_token", "scan_query", "scan_before", "scan_cursor_version",
+            "last_sync_summary", "sync_lock_id", "sync_lock_until", "needs_reconnect",
+            "reconnect_reason", "reconnect_at", "sync_run",
         )}},
         upsert=True,
     )
@@ -685,13 +707,17 @@ class _MessageBatch(list):
     next_page_token: Optional[str] = None
     scan_query: Optional[str] = None
     scan_before: Optional[datetime] = None
+    scan_version: int = SCAN_VERSION
+    # Messages left out because the user wrote them (sent, draft, chat).
+    skipped_own: int = 0
 
 
 def _list_message_ids(access_token: str, query: str, max_results: int,
                       page_token: Optional[str] = None, budget: Optional[_GmailReadBudget] = None) -> List[str]:
     ids = _MessageBatch()
     while len(ids) < max_results:
-        params: Dict[str, Any] = {"q": query, "maxResults": min(100, max_results - len(ids))}
+        params: Dict[str, Any] = {"q": query, "maxResults": min(100, max_results - len(ids)),
+                                  "includeSpamTrash": "true"}
         if page_token:
             params["pageToken"] = page_token
         # raise_on_error=True so a transient 4xx/5xx surfaces as an exception in
@@ -707,42 +733,121 @@ def _list_message_ids(access_token: str, query: str, max_results: int,
     return ids
 
 
-def _b64url_decode(data: str) -> str:
+def _b64url_bytes(data: str) -> bytes:
     if not data:
-        return ""
-    pad = "=" * (-len(data) % 4)
+        return b""
     try:
-        return base64.urlsafe_b64decode(data + pad).decode("utf-8", errors="replace")
+        return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
     except Exception:
+        return b""
+
+
+def _decode_part(data: str, charset: str = "") -> str:
+    """A part's text in the charset it declared.
+
+    Gmail hands back the sender's bytes. Read as UTF-8 regardless, a
+    Windows-1252 apostrophe became U+FFFD and "we've decided" stopped matching.
+    """
+    raw = _b64url_bytes(data)
+    if not raw:
         return ""
+    for name in (charset.strip().strip('"\'').lower(), "utf-8", "cp1252"):
+        if not name:
+            continue
+        try:
+            return raw.decode(name)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _b64url_decode(data: str) -> str:
+    return _decode_part(data)
+
+
+def _part_charset(part: Dict[str, Any]) -> str:
+    for header in part.get("headers") or []:
+        if str(header.get("name") or "").lower() == "content-type":
+            found = re.search(r"charset\s*=\s*\"?([\w.:-]+)", str(header.get("value") or ""), re.I)
+            return found.group(1) if found else ""
+    return ""
+
+
+# Markup whose CONTENT is never something a person reads. A stylesheet alone
+# used to fill the whole text budget of an HTML-only email.
+_HTML_UNREAD = re.compile(r"(?is)<(style|script|head|title|svg|noscript|template)\b.*?</\1\s*>|<!--.*?-->")
+# Everything a mail client adds when you press Reply. What follows is an older
+# message, which was read as its own email when it arrived.
+_HTML_QUOTED = re.compile(
+    r"(?is)<(?:div|blockquote)\b[^>]*(?:class\s*=\s*[\"'][^\"']*\b(?:gmail_quote|yahoo_quoted|moz-cite-prefix)\b"
+    r"|id\s*=\s*[\"'](?:divRplyFwdMsg|appendonsend|OLK_SRC_BODY_SECTION)[\"']|type\s*=\s*[\"']cite[\"']).*")
+_HTML_BREAK = re.compile(r"(?i)<\s*(?:br|hr|/p|/div|/tr|/li|/h[1-6]|/table|/blockquote|/td|/th)\b[^>]*>")
+_HTML_TAG = re.compile(r"<[^>]+>")
+# Zero-width and soft-hyphen characters: invisible, used as preview padding,
+# and enough to break a phrase match when one lands inside a word.
+_INVISIBLE = re.compile("[​‌‍‎‏⁠﻿­͏᠎؜]")
+_APOSTROPHES = str.maketrans({"‘": "'", "’": "'", "ʼ": "'", "′": "'", "´": "'",
+                              "“": '"', "”": '"'})
+_REPLY_HEADER = re.compile(
+    r"(?im)^\s*(?:on\b[^\n]{6,200}\bwrote:\s*$|on\b[^\n]{6,200}\n[^\n]{0,80}\bwrote:\s*$"
+    r"|-{2,}\s*original message\s*-{2,}\s*$|_{8,}\s*\n\s*from:[^\n]*$"
+    r"|from:[^\n]{1,200}\n\s*sent:[^\n]{1,200}\n\s*to:[^\n]*$)")
+
+
+# Words the writer put above a quoted message before it counts as a reply.
+# With nothing above it, the quote IS the message (a forward).
+_OWN_WORDS_BEFORE_QUOTE = 20
+
+
+def _html_to_text(markup: str) -> str:
+    markup = _HTML_UNREAD.sub(" ", markup)
+    quoted = _HTML_QUOTED.search(markup)
+    if quoted and len(_HTML_TAG.sub(" ", markup[:quoted.start()]).strip()) >= _OWN_WORDS_BEFORE_QUOTE:
+        markup = markup[:quoted.start()]
+    return _HTML_TAG.sub(" ", _HTML_BREAK.sub("\n", markup))
+
+
+def _readable(text: str) -> str:
+    """Entities decoded, the quoted older message removed, one space between words.
+
+    Line breaks are folded on purpose: plain-text mail wraps at about 76
+    characters, so "decided to move\nforward with other candidates" has to read
+    as one sentence.
+    """
+    text = _INVISIBLE.sub("", html.unescape(text)).translate(_APOSTROPHES)
+    header = _REPLY_HEADER.search(text)
+    if header and len(text[:header.start()].strip()) >= _OWN_WORDS_BEFORE_QUOTE:
+        text = text[:header.start()]
+        text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith(">"))
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _extract_body_text(payload: Dict[str, Any]) -> str:
-    """Walk a Gmail payload tree and concatenate text/plain (preferred) or text/html parts."""
+    """The words of an email as its reader saw them: the plain-text part when it
+    carries the message, otherwise the HTML part with its markup removed."""
     if not payload:
         return ""
-    out: List[str] = []
     plain: List[str] = []
-    html: List[str] = []
+    marked_up: List[str] = []
 
     def walk(part: Dict[str, Any]) -> None:
-        mime = part.get("mimeType", "")
-        body = part.get("body") or {}
-        data = body.get("data")
-        if mime == "text/plain" and data:
-            plain.append(_b64url_decode(data))
-        elif mime == "text/html" and data:
-            html.append(_b64url_decode(data))
+        mime = str(part.get("mimeType") or "").lower()
+        data = (part.get("body") or {}).get("data")
+        if data and mime == "text/plain":
+            plain.append(_decode_part(data, _part_charset(part)))
+        elif data and mime == "text/html":
+            marked_up.append(_decode_part(data, _part_charset(part)))
         for sub in part.get("parts") or []:
             walk(sub)
 
     walk(payload)
-    out.extend(plain or html)
-    text = "\n".join(out)
-    if not plain and html:
-        text = re.sub(r"<[^>]+>", " ", text)  # strip HTML tags
-    text = re.sub(r"\s+", " ", text).strip()
-    return text[:4000]  # plenty for the classifier; keeps token budget tight
+    plain_text = _readable("\n".join(plain))
+    html_text = _readable(_html_to_text("\n".join(marked_up))) if marked_up else ""
+    # Some senders ship a stub plain part ("open this in an HTML viewer") beside
+    # the real message. Prefer plain text unless it is clearly the stub.
+    if html_text and (len(plain_text) < 200 and len(plain_text) < len(html_text) / 2):
+        return html_text[:BODY_TEXT_LIMIT]
+    return (plain_text or html_text)[:BODY_TEXT_LIMIT]
 
 
 def _headers_dict(headers: Iterable[Dict[str, str]]) -> Dict[str, str]:
@@ -759,7 +864,46 @@ def _parse_email_address(value: str) -> Tuple[str, str]:
     return "", value.strip().lower()
 
 
-def fetch_recent_messages(user_email: str, since: Optional[datetime]) -> List[Dict[str, Any]]:
+# What Gmail is asked for. An email about an application says so in ordinary
+# words, so the search asks for those words and nothing else is ever opened:
+# no receipts, no statements, no personal mail. That is also what makes a first
+# scan take minutes instead of an hour, since Google allows roughly 100 full
+# reads a minute per mailbox.
+_SEARCH_TERMS = (
+    "application", "applications", "applied", "applying", "candidate", "candidates", "candidacy",
+    "interview", "interviews", "interviewing", "interviewer", "recruiter", "recruiters",
+    "recruiting", "recruitment", "hiring", "position", "role", "requisition", "offer",
+    "assessment", "resume", "opportunity", "opportunities", "job", "career", "careers", "talent",
+    "calendly", "availability", "onsite", "screening", '"phone screen"', '"next steps"',
+    '"not selected"', '"move forward"', '"moving forward"', "hackerrank", "codility",
+    "codesignal", "coderpad",
+)
+_EMAIL_ADDRESS = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}")
+# Never a reply from an employer: what the user wrote, an unsent draft, a chat.
+_OWN_LABELS = {"SENT", "DRAFT", "CHAT"}
+
+
+def scan_scope() -> str:
+    """`focused` (application mail only) unless the operator sets
+    GMAIL_SCAN_SCOPE=all, which restores the search of every email."""
+    raw = (_get_config_value("GMAIL_SCAN_SCOPE", "") or "").strip().lower()
+    return "all" if raw == "all" else "focused"
+
+
+def _search_query(after_epoch: int, before_epoch: int, recruiter_emails: Iterable[str] = ()) -> str:
+    query = (f"in:anywhere after:{max(0, after_epoch - 1)} before:{before_epoch} "
+             "-in:sent -in:chats -category:promotions -category:social")
+    if scan_scope() == "all":
+        return query
+    # A saved recruiter may write without any of the words above.
+    senders = sorted({addr.lower() for addr in recruiter_emails
+                      if isinstance(addr, str) and _EMAIL_ADDRESS.fullmatch(addr.strip())})[:20]
+    terms = list(_SEARCH_TERMS) + [f"from:{addr}" for addr in senders]
+    return query + " {" + " ".join(terms) + "}"
+
+
+def fetch_recent_messages(user_email: str, since: Optional[datetime],
+                          recruiter_emails: Iterable[str] = ()) -> List[Dict[str, Any]]:
     """Return a list of normalized message dicts since the given datetime."""
     access, conn = _get_access_token(user_email)
     budget = _GmailReadBudget()
@@ -770,15 +914,17 @@ def fetch_recent_messages(user_email: str, since: Optional[datetime]) -> List[Di
     # Freeze the upper boundary across pages. New mail belongs to the NEXT
     # scan; a completed watermark must never skip an unprocessed older page.
     before = conn.get("scan_before") or datetime.now(timezone.utc).replace(microsecond=0)
-    query = conn.get("scan_query") or (
-        f"in:anywhere after:{max(0, after_epoch - 1)} before:{int(before.timestamp())} "
-        "-category:promotions -category:social"
-    )
+    resuming = bool(conn.get("scan_query"))
+    query = conn.get("scan_query") or _search_query(after_epoch, int(before.timestamp()), recruiter_emails)
     ids = _list_message_ids(access, query, MAX_MESSAGES_PER_SYNC, conn.get("scan_next_page_token"), budget)
     out = _MessageBatch()
     out.next_page_token = ids.next_page_token
     out.scan_query = query
     out.scan_before = before
+    # A scan that began under older rules finishes under them; the version it
+    # earns is the one its query was written with.
+    out.scan_version = int(conn.get("scan_cursor_version") or 1) if resuming else SCAN_VERSION
+    mailbox = str(conn.get("gmail_address") or "").strip().lower()
     for mid in ids:
         full = _gmail_get(f"/users/me/messages/{mid}", access,
                           params={"format": "full"}, raise_on_error=True, budget=budget)
@@ -787,6 +933,11 @@ def fetch_recent_messages(user_email: str, since: Optional[datetime]) -> List[Di
         payload = full.get("payload") or {}
         headers = _headers_dict(payload.get("headers") or [])
         from_name, from_addr = _parse_email_address(headers.get("from", ""))
+        # The search already leaves these out. Checked again on the message
+        # itself, because a decision must never rest on the user's own words.
+        if _OWN_LABELS.intersection(full.get("labelIds") or []) or (mailbox and from_addr == mailbox):
+            out.skipped_own += 1
+            continue
         subject = headers.get("subject", "")
         date_hdr = headers.get("date", "")
         snippet = full.get("snippet", "") or ""
@@ -848,37 +999,92 @@ def _contains_phrase(text: str, phrase: str) -> bool:
     return bool(phrase) and f" {phrase} " in f" {text} "
 
 
+# Other jobs listed under a message are never evidence about this application.
 _FOOTER_START = re.compile(
     r"\b(?:(?:recommended|suggested|similar) (?:jobs|roles|opportunities)|"
-    r"jobs you (?:might|may) (?:like|be interested in)|you may also like|"
-    r"(?:follow|connect with) us (?:on|at)|privacy policy|unsubscribe|"
+    r"jobs you (?:might|may) (?:like|be interested in)|you may also like)\b", re.IGNORECASE)
+# The legal lines under a message. At the very top of an email ("View in
+# browser | Unsubscribe") they are a header and the message follows them.
+_LEGAL_FOOTER = re.compile(
+    r"\b(?:(?:follow|connect with) us (?:on|at)|privacy policy|unsubscribe|"
     r"manage (?:email |notification )?preferences)\b", re.IGNORECASE)
+_LEGAL_FOOTER_FROM = 300
 _PRIMARY_EMPLOYER_PATTERNS = [re.compile(pattern, re.IGNORECASE) for pattern in (
     r"\b(?:thank you|thanks) for (?:applying to|your application (?:to|at|with))\s+(.{2,120}?)(?=[.!?;\n|]|$)",
     r"\b(?:your )?application (?:to|at|with)\s+(.{2,120}?)(?=\s+(?:(?:has been|was|is)\s+)?(?:successfully\s+)?(?:submitted|received|rejected|accepted)\b|[.!?;\n|]|$)",
 )]
 _PLATFORM_DOMAINS = ("linkedin.com", "indeed.com", "wellfound.com", "greenhouse-mail.io",
-                     "greenhouse.io", "lever.co", "myworkdayjobs.com", "smartrecruiters.com")
+                     "greenhouse.io", "lever.co", "myworkdayjobs.com", "smartrecruiters.com",
+                     "myworkday.com", "workday.com", "ashbyhq.com", "icims.com", "jobvite.com",
+                     "workable.com", "workablemail.com", "taleo.net", "successfactors.com",
+                     "oraclecloud.com", "bamboohr.com", "recruitee.com", "teamtailor.com",
+                     "rippling.com", "gem.com", "eightfold.ai", "avature.net", "applytojob.com",
+                     "breezy.hr", "glassdoor.com", "ziprecruiter.com", "dice.com",
+                     "joinhandshake.com", "hackerrank.com", "codility.com", "codesignal.com")
+
+
+# Words a hiring sender puts after the employer's name: "Acme Recruiting Team".
+_SENDER_FILLER = frozenset((
+    "recruiting recruitment recruiter recruiters careers career talent acquisition hiring team "
+    "jobs hr people university campus early notifications notification no reply noreply do not "
+    "donotreply via at the workday greenhouse lever ashby icims smartrecruiters global us usa "
+    "candidate experience support staffing ta").split())
+
+
+def _sender_names_company(msg: Dict[str, Any], company: str, platform_sender: bool) -> bool:
+    """True when the From line itself names this employer.
+
+    Hiring systems send as "Acme Recruiting <no-reply@greenhouse-mail.io>" or
+    as acme@myworkday.com, often with a subject and body that never repeat the
+    name. Read alone that email matched nothing and was dropped.
+    """
+    if len(company) < 2:
+        return False
+    name = _normalize(msg.get("from_name") or "")
+    if name:
+        if _company_token(msg.get("from_name") or "") == company:
+            return True
+        if name.startswith(company + " ") and all(
+                word in _SENDER_FILLER for word in name[len(company):].split()):
+            return True
+        if any(name.endswith(f" {joiner} {company}") for joiner in ("at", "from", "with")):
+            return True
+    local = str(msg.get("from_address") or "").split("@")[0].lower()
+    return platform_sender and len(company) >= 3 and re.sub(r"[^a-z0-9]", "", local) == company.replace(" ", "")
 
 
 def _primary_employer_token(label: str, index: List[Dict[str, Any]]) -> str:
-    token = _company_token(label.strip())
-    if any(rec["company_token"] == token for rec in index):
+    """The employer a "thank you for applying to ..." phrase names, or "" when
+    the phrase names a role and no employer."""
+    label = label.strip()
+    token = _company_token(label)
+    if token in _index_facts(index)["company_tokens"]:
         return token
+    # "the Data Engineer position at Acme": the employer is what follows "at".
+    placed = re.match(r"^(.{2,120}?)\s+(?:at|with)\s+(.{2,80})$", label, re.IGNORECASE)
+    if placed and (_ROLE_NOUN.search(placed.group(1))
+                   or re.search(r"\b(?:role|position|opening|job|team)\b", placed.group(1), re.I)):
+        return _company_token(placed.group(2))
     # Common subject templates append the role after the employer. Only split
     # a dash/"for" suffix when it contains a tracked role, not a company suffix.
     parts = re.split(r"\s+(?:for\s+(?:the\s+|an?\s+)?|[-–—]\s+)", label, maxsplit=1, flags=re.IGNORECASE)
     if len(parts) == 2 and any(_contains_phrase(_normalize(parts[1]), rec["title_norm"])
                               for rec in index if rec["title_norm"]):
         return _company_token(parts[0])
+    # "the Data Engineer role" names a role and nobody. Treating it as an
+    # untracked employer hid the email from every application.
+    if re.match(r"^(?:the|our|a|an|this|your)\s", label, re.I) and (
+            _ROLE_NOUN.search(label) or re.search(r"\b(?:role|position|opening|job)\s*$", label, re.I)):
+        return ""
     return token
 
 
 def _application_body(msg: Dict[str, Any]) -> str:
     """Only application content can establish identity or an outcome."""
     text = html.unescape(str(msg.get("body") or msg.get("snippet") or ""))[:12000]
-    footer = _FOOTER_START.search(text)
-    return text[:footer.start()] if footer else text
+    cuts = [found.start() for found in (_FOOTER_START.search(text),
+                                        _LEGAL_FOOTER.search(text, _LEGAL_FOOTER_FROM)) if found]
+    return text[:min(cuts)] if cuts else text
 
 
 def _application_text(msg: Dict[str, Any]) -> str:
@@ -889,23 +1095,31 @@ def _primary_employers(msg: Dict[str, Any], index: List[Dict[str, Any]]) -> Opti
     subject = html.unescape(str(msg.get("subject") or ""))
     for pattern in _PRIMARY_EMPLOYER_PATTERNS:
         match = pattern.search(subject)
-        if match:
+        token = _primary_employer_token(match.group(1), index) if match else ""
+        if token:
             # Preserve even an UNTRACKED employer: never fall back to a footer
             # brand simply because the true application isn't in the tracker.
-            return {_primary_employer_token(match.group(1), index)}
+            return {token}
     # Product names can also be employers (e.g. a Guidewire Developer at Acme).
     # A company word inside the role title cannot establish the employer.
     subject_without_roles = _normalize(subject)
-    for title in sorted({rec["title_norm"] for rec in index if rec["title_norm"]}, key=len, reverse=True):
-        subject_without_roles = re.sub(r"\b" + re.escape(title) + r"\b", " ", subject_without_roles)
-    named = {r["company_token"] for r in index if r["company_token"]
-             and _contains_phrase(_normalize(subject_without_roles), r["company_token"])}
+    for title in _index_facts(index)["titles"]:
+        # A word-bounded match needs the title to be in the text at all. Testing
+        # that first keeps this to the one or two titles a subject can hold;
+        # compiling a pattern per tracked title made every request cost
+        # (emails x applications) and timed the review queue out.
+        if title in subject_without_roles:
+            subject_without_roles = re.sub(r"\b" + re.escape(title) + r"\b", " ", subject_without_roles)
+    remaining = _normalize(subject_without_roles)
+    named = {token for token in _index_facts(index)["company_tokens"]
+             if _contains_phrase(remaining, token)}
     if named:
         return named
     for pattern in _PRIMARY_EMPLOYER_PATTERNS:
         match = pattern.search(_application_body(msg))
-        if match:
-            return {_primary_employer_token(match.group(1), index)}
+        token = _primary_employer_token(match.group(1), index) if match else ""
+        if token:
+            return {token}
     return None
 
 
@@ -920,7 +1134,90 @@ def _is_job_recommendation(msg: Dict[str, Any]) -> bool:
     return sender.endswith("@match.indeed.com") or bool(re.search(
         r"\b(?:(?:strong|great|good|top) match|(?:job|role) recommendations?|"
         r"(?:jobs|roles|opportunities) for you|job alerts?|apply now|view (?:this |the )?job|"
-        r"if (?:you['’]?re|you are) interested)\b", text, re.IGNORECASE))
+        r"if (?:you['’]?re|you are) interested|new jobs? (?:at|for|in|matching)|similar jobs|"
+        r"jobs similar to|top job picks|job picks|recommended for you|easy apply|"
+        r"based on your (?:profile|resume|search|activity)|see (?:all|more) jobs)\b",
+        text, re.IGNORECASE))
+
+
+_TALENT_MARKETING = re.compile(
+    r"\b(?:webinar|open house|tech talk|info(?:rmation)? session|career fair|hiring event|meetup|"
+    r"newsletter|talent (?:community|network)|register (?:now|here|today)|rsvp|"
+    r"save your (?:seat|spot)|join us (?:for|at|on)|(?:monthly|weekly) (?:digest|update))\b",
+    re.IGNORECASE)
+
+
+def _is_talent_marketing(msg: Dict[str, Any]) -> bool:
+    """An event invitation or a talent-community mailing: from an employer,
+    full of hiring words, and nothing to do with an application's outcome."""
+    text = _application_text(msg)
+    if not _TALENT_MARKETING.search(text):
+        return False
+    return not _states_an_outcome(text)
+
+
+def _states_an_outcome(text: str) -> bool:
+    return any(_scan_patterns(text, patterns) for patterns in
+               (_APPLICATION_ACK_REGEX, _REJECTION_REGEX, _OFFER_REGEX, _WITHDRAWN_REGEX)) or bool(
+        _scan_patterns(text, _INTERVIEW_REGEX, stated=True))
+
+
+# Mail a hiring portal sends that says nothing about where an application
+# stands: a reminder to finish one that was never submitted, or a survey.
+_HOUSEKEEPING = re.compile(
+    r"\b(?:(?:finish|complete|continue|resume) your application|started an application|"
+    r"application is (?:incomplete|not (?:yet )?(?:complete|submitted))|"
+    r"has not (?:yet )?been submitted|candidate (?:experience )?survey|"
+    r"(?:feedback on|rate|how was) your (?:interview |candidate |application )?experience)\b",
+    re.IGNORECASE)
+
+
+def _is_application_housekeeping(msg: Dict[str, Any]) -> bool:
+    text = _application_text(msg)
+    if not _HOUSEKEEPING.search(text):
+        return False
+    return not any(_scan_patterns(text, patterns) for patterns in
+                   (_REJECTION_REGEX, _OFFER_REGEX, _WITHDRAWN_REGEX))
+
+
+# An email is ABOUT an application when it uses the vocabulary of hiring. This
+# is the gate between "names a company I applied to" and "is a reply to my
+# application": without it every order receipt, security alert and newsletter
+# from a tracked employer became a review item.
+_CLEARLY_HIRING = re.compile(
+    r"\b(?:candidate|candidates|candidacy|recruiter|recruiters|recruiting|recruitment|"
+    r"talent acquisition|hiring (?:team|manager|process|committee)|interview(?:s|ing|er|ed)?|"
+    r"phone screen|requisition|r[eé]sum[eé]|job application|offer letter|offer of employment)\b",
+    re.IGNORECASE)
+_APPLICATION_WORDS = re.compile(
+    r"\b(?:your application|application (?:for|to|at|with|status|update|received|portal|process|"
+    r"decision|submitted)|appl(?:ied|ying) (?:for|to|at|with)|thank(?:s| you) for applying)\b",
+    re.IGNORECASE)
+# Words a newsletter uses as freely as a recruiter does ("the role of AI",
+# "a new opening"). They count only when the email also names the tracked role.
+_LOOSE_HIRING_WORDS = re.compile(
+    r"\b(?:position|opening|job|career|careers|role|assessment|next steps?|offer|opportunity)\b",
+    re.IGNORECASE)
+_NOT_HIRING = re.compile(
+    r"\b(?:credit card|debit card|card application|loan|mortgage|lease|rental|apartment|"
+    r"insurance (?:policy|claim|quote)|bank account|checking account|savings account|"
+    r"credit (?:limit|line|score)|order (?:number|confirmation|has shipped|is on its way)|"
+    r"your order|shipment|shipped|out for delivery|tracking number|invoice|billing statement|"
+    r"payment (?:received|due|confirmation|method)|subscription|refund|app store|google play|"
+    r"sign[- ]in (?:attempt|alert)|new sign[- ]in|security alert|two[- ]factor|"
+    r"2[- ]step verification|password (?:reset|change))\b", re.IGNORECASE)
+
+
+def _about_an_application(msg: Dict[str, Any]) -> str:
+    """"yes", "maybe" (only loose words: the role must be named too) or ""."""
+    text = _application_text(msg)
+    if _CLEARLY_HIRING.search(text):
+        return "yes"
+    if _NOT_HIRING.search(text):
+        return ""
+    if _APPLICATION_WORDS.search(text):
+        return "yes"
+    return "maybe" if _LOOSE_HIRING_WORDS.search(text) else ""
 
 
 def _is_irrelevant_mail(msg: Dict[str, Any]) -> bool:
@@ -937,7 +1234,8 @@ def _is_irrelevant_mail(msg: Dict[str, Any]) -> bool:
         r"^verify your candidate account[.!]?$",
         r"^reset your password[.!]?$",
     ))
-    return auth_notice or _is_job_recommendation(msg)
+    return (auth_notice or _is_job_recommendation(msg) or _is_talent_marketing(msg)
+            or _is_application_housekeeping(msg))
 
 
 def _candidate_record(rec: Dict[str, Any]) -> Dict[str, Any]:
@@ -949,8 +1247,33 @@ def _candidate_record(rec: Dict[str, Any]) -> Dict[str, Any]:
     return candidate
 
 
+class _RecordIndex(list):
+    """The tracked applications, plus the lists every email is tested against.
+
+    Still a plain list of record facts to every caller. `facts` is worked out
+    once per index instead of once per email.
+    """
+    facts: Optional[Dict[str, List[str]]] = None
+
+
+def _index_facts(index: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+    cached = getattr(index, "facts", None)
+    if cached is not None:
+        return cached
+    facts = {
+        # Longest first: "senior data engineer" is removed before "data engineer".
+        "titles": sorted({rec["title_norm"] for rec in index if rec.get("title_norm")},
+                         key=lambda title: (-len(title), title)),
+        "company_tokens": sorted({rec["company_token"] for rec in index if rec.get("company_token")}),
+        "companies": sorted({rec["company"] for rec in index if rec.get("company")}),
+    }
+    if isinstance(index, _RecordIndex):
+        index.facts = facts
+    return facts
+
+
 def _build_record_index(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    index = []
+    index = _RecordIndex()
     for r in records:
         jd = r.get("jd_analysis") or {}
         app = r.get("application") or {}
@@ -992,6 +1315,8 @@ _EXPLICIT_ROLE_PATTERNS = [re.compile(pattern, re.I) for pattern in (
     r"\b(?:regarding|for)\s+(?:the\s+)?(?!applying\b)(.{2,140}?)\s+(?:role|position)\b",
     r"\b(?:regarding|for)\s+(?:the\s+)?(.{2,140}?)\s+at\s",
     r"\b(?:role|position|job title)\s*(?:of|:)\s*(.{2,140}?)(?=\s+at\s|[.!?\n]|$)",
+    # Lever, Ashby: "thanks for applying to the Data Engineer role".
+    r"\bappl(?:y|ying|ied)\s+(?:to|for)\s+(?:the\s+|our\s+|an?\s+)?(.{2,140}?)\s+(?:role|position|opening|job)\b",
 )]
 
 
@@ -1010,6 +1335,31 @@ def _clean_role_title(role: str) -> str:
     role = re.sub(r"[\[(]?\b(?:req(?:uisition)?\.?)\s*(?:id|number|#)?\s*[:#-]?\s*(?:(?:JR|R)[- ]?)?\d+\s*[\])]?", "", role, flags=re.I)
     role = re.sub(r"\s+(?:role|position|opening|open)\s*[.,:;–—-]*$", "", role.strip(), flags=re.I)
     return _normalize(role)
+
+
+# Words of the sentence around a title, never of a title itself.
+_ROLE_WRAPPER = re.compile(
+    r"\b(?:your|you|we|our|thank|thanks|applying|applied|interest|interested|speaking|talking)\b", re.I)
+_ROLE_LEAD_IN = re.compile(r".*\b(?:for|in|to|about|regarding)\s+(?:the|our|an?)\s+", re.I)
+_ROLE_BARE_LEAD_IN = re.compile(r".*\b(?:for|in|to|about|regarding)\s+", re.I)
+
+
+def _role_from_capture(capture: str) -> str:
+    """The title inside a captured phrase.
+
+    The role patterns are greedy about where a title starts: "thank you for
+    your interest in the Data Engineer role" captures "your interest in the
+    Data Engineer". Kept whole, that phantom second role made every such email
+    look as if it named two roles, and nothing was ever applied.
+    """
+    role = _clean_role_title(capture)
+    wrapped = bool(_ROLE_WRAPPER.search(role))
+    for lead_in in ((_ROLE_LEAD_IN, _ROLE_BARE_LEAD_IN) if wrapped else (_ROLE_LEAD_IN,)):
+        if lead_in.match(capture.strip()):
+            tail = _clean_role_title(lead_in.sub("", capture.strip(), count=1))
+            if tail and _ROLE_NOUN.search(tail) and not _ROLE_WRAPPER.search(tail):
+                return tail
+    return "" if wrapped else role
 
 
 def _explicit_role_titles(msg: Dict[str, Any], index: List[Dict[str, Any]]) -> List[str]:
@@ -1031,7 +1381,13 @@ def _explicit_role_titles(msg: Dict[str, Any], index: List[Dict[str, Any]]) -> L
     title_subject = re.search(r"^(.{2,140}?)\s*[-–—:]\s*(?:application (?:decision|update)|application|decision|update)\b", subject, re.I)
     if title_subject:
         roles.append(title_subject.group(1))
-    for company in {rec["company"] for rec in index if rec["company"]}:
+    subject_folded = subject.lower()
+    for company in _index_facts(index)["companies"]:
+        # Both patterns hold the company name literally, so a subject without
+        # it cannot match. Non-ASCII names skip the shortcut: their case rules
+        # differ between str.lower() and the regex engine.
+        if company.isascii() and company.lower() not in subject_folded:
+            continue
         for pattern in (
             r"^" + re.escape(company) + r"\s+(.{2,140}?)\s+application\b",
             r"\bapplication to\s+" + re.escape(company) + r"\s*[-–—:]\s*(.{2,140})$",
@@ -1039,7 +1395,7 @@ def _explicit_role_titles(msg: Dict[str, Any], index: List[Dict[str, Any]]) -> L
             found = re.search(pattern, subject, re.I)
             if found:
                 roles.append(found.group(1))
-    cleaned = (_clean_role_title(role) for role in roles if _ROLE_NOUN.search(role))
+    cleaned = (_role_from_capture(role) for role in roles if _ROLE_NOUN.search(role))
     return list(dict.fromkeys(role for role in cleaned if role))
 
 
@@ -1060,7 +1416,9 @@ def _exact_role_in_text(text: str, title: str, company: str = "") -> bool:
         after_word = after.strip().split()[:1] or [""]
         if before_word[0] not in {"", "for", "the", "of", "as", "regarding", "role", "position", "application", "a", "an", "is", "our", "your", *company.split()[-1:]}:
             continue
-        if after_word[0] not in {"", "at", "with", "position", "role", "application", "we", "your", "thank", "thanks", "is", "was", "has", "have", "our", "to", "and", "the"}:
+        if after_word[0] not in {"", "at", "with", "position", "role", "application", "we", "your", "thank", "thanks", "is", "was", "has", "have", "our", "to", "and", "the",
+                                 "interview", "interviews", "opening", "job", "opportunity", "candidate",
+                                 "candidacy", "phone", "onsite", "coding", "assessment", "screen"}:
             continue
         return True
     return False
@@ -1075,31 +1433,54 @@ def _match_message_to_record(msg: Dict[str, Any], index: List[Dict[str, Any]]) -
     """
     if not index or _is_irrelevant_mail(msg):
         return None
+    sender_addr = (msg.get("from_address") or "").lower()
+    # Naming a company is not being about a job there. Only hiring mail, or a
+    # recruiter the user saved on an application, goes any further.
+    about = _about_an_application(msg)
+    if not about and not any(
+            rec["recruiter_email"] and rec["recruiter_email"] == sender_addr for rec in index):
+        return None
     haystack = _normalize(_application_text(msg))
     primary_employers = _primary_employers(msg, index)
     explicit_roles = _explicit_role_titles(msg, index)
     email_requisitions = _requisition_ids(_application_text(msg))
     sender_domain = (msg.get("from_domain") or "").lower()
-    sender_addr = (msg.get("from_address") or "").lower()
     platform_sender = any(sender_domain == domain or sender_domain.endswith("." + domain)
                           for domain in _PLATFORM_DOMAINS)
 
     candidates = []
     employer_records = []
+    named_in_text: Dict[str, bool] = {}
+
+    def company_is_named(company: str) -> bool:
+        if len(company) < 2:
+            return False
+        if company in (primary_employers or set()):
+            return True
+        if company not in named_in_text:
+            # Containment first: a tracker of several hundred applications must
+            # not compile several hundred patterns for every email.
+            named_in_text[company] = company in haystack and bool(re.search(
+                r"(?:\b(?:at|to|with|from|company|joining|join|interest in|interested in|behalf of)\s+"
+                + re.escape(company) + r"\b|\b" + re.escape(company)
+                + r"\s+(?:application|careers|recruiting|recruitment|hiring|talent|team)\b)", haystack))
+        return named_in_text[company]
+
     for rec in index:
         company = rec["company_token"]
         if primary_employers is not None and company not in primary_employers:
             continue
-        company_named = len(company) >= 2 and (
-            company in (primary_employers or set()) or bool(re.search(
-                r"(?:\b(?:at|to|with|from|company)\s+" + re.escape(company) + r"\b|\b" +
-                re.escape(company) + r"\s+(?:application|careers|recruiting|hiring|team)\b)", haystack)))
+        company_named = company_is_named(company)
         # Exact DNS label only: Box != Dropbox, and United Airlines != United
         # Healthcare. Shared ATS/recruiter domains never establish identity.
         company_domain = not platform_sender and len(company) >= 3 and company.replace(" ", "") in sender_domain.split(".")[:-1]
         recruiter = bool(rec["recruiter_email"] and rec["recruiter_email"] == sender_addr)
-        if not (company_named or company_domain or recruiter):
+        sender_named = _sender_names_company(msg, company, platform_sender)
+        if not (company_named or company_domain or recruiter or sender_named):
             continue
+        # A From name is the employer's own word only where the employer set
+        # it: on a hiring platform, or on their own domain.
+        identified = company_named or (sender_named and (platform_sender or company_domain))
         employer_records.append(rec)
         if explicit_roles and rec["title_norm"] not in explicit_roles:
             continue
@@ -1107,6 +1488,8 @@ def _match_message_to_record(msg: Dict[str, Any], index: List[Dict[str, Any]]) -
             continue
         title_exact = (rec["title_norm"] in explicit_roles if explicit_roles
                        else _exact_role_in_text(_application_text(msg), rec["title_norm"], company))
+        if about == "maybe" and not title_exact and not recruiter:
+            continue
         reasons = []
         if company_named:
             reasons.append("Company identified in application content")
@@ -1114,12 +1497,14 @@ def _match_message_to_record(msg: Dict[str, Any], index: List[Dict[str, Any]]) -
             reasons.append("Company name matches sender domain label")
         if recruiter:
             reasons.append("Saved recruiter email matches sender")
+        if sender_named and not company_named:
+            reasons.append("Sent in the company's name")
         if title_exact:
             reasons.append("Exact role title in email")
         else:
             reasons.append("Role title not confirmed; review before updating")
         # A recruiter alone can handle many unrelated companies, so needs review.
-        score = 0.97 if title_exact and company_named else 0.85 if title_exact else 0.6
+        score = 0.97 if title_exact and identified else 0.85 if title_exact else 0.6
         if email_requisitions:
             if len(email_requisitions) > 1 or not email_requisitions.intersection(rec["requisition_ids"]):
                 score = min(score, 0.85)
@@ -1130,7 +1515,7 @@ def _match_message_to_record(msg: Dict[str, Any], index: List[Dict[str, Any]]) -
             score = min(score, 0.85)
         candidates.append((rec, score, "; ".join(reasons)))
     if not candidates:
-        if employer_records and (explicit_roles or email_requisitions):
+        if about == "yes" and employer_records and (explicit_roles or email_requisitions):
             # Keep true application mail whose role is not tracked, but never
             # offer an unrelated same-company record as a plausible match.
             meta = dict(employer_records[0])
@@ -1208,16 +1593,24 @@ VALID_STATUSES = {"applied", "interviewing", "offer", "rejected", "ghosted", "wi
 _REJECTION_PATTERNS = [
     # ── "moving forward with other candidates" family ────────────────────
     r"\bwe (?:have )?decided to (?:move|go) forward with other (?:candidates|applicants)\b",
-    r"\bmoving forward with (?:other|another|different) candidate",
-    r"\bgoing (?:to (?:move|go) )?forward with (?:other|another) candidate",
-    r"\b(?:we have )?selected (?:other|another) candidate",
-    r"\bwe['’]ve (?:chosen|selected) (?:to (?:move|go) forward with )?(?:another|other) candidate",
-    r"\bother candidates whose (?:experience|background|qualifications) (?:more closely|better) (?:match|align)",
+    r"\b(?:decided|chosen|elected|opted) to (?:move|go|proceed) (?:forward|ahead) with (?:other|another|a different|different) (?:candidates?|applicants?)\b",
+    r"\bmoving forward with (?:other|another|different) (?:candidate|applicant)",
+    r"\bgoing (?:to (?:move|go) )?forward with (?:other|another) (?:candidate|applicant)",
+    r"\b(?:we have )?selected (?:other|another) (?:candidate|applicant)",
+    r"\bwe(?:['’]ve| have) (?:chosen|selected) (?:to (?:move|go) forward with )?(?:another|other) (?:candidate|applicant)",
+    r"\bother candidates whose (?:experience|background|qualifications|skills) (?:more closely|better|more) (?:match|align|fit)",
     r"\b(?:proceed|continue|advance) (?:with|in)\s+other (?:candidates|applicants)\b",
+    r"\bmov(?:ed|ing) forward with (?:a |an )?(?:different|another|other) (?:candidate|applicant|direction)",
+    r"\b(?:go|going|gone|went) in (?:a|another) different direction\b",
 
     # ── "we will not be moving/proceeding forward" family ────────────────
     r"\bwe (?:will|won['’]t|will not|are not|won['’]?t be) (?:moving|proceeding|progressing|going) (?:forward|further|ahead) (?:with|in)\b",
     r"\bnot (?:be |going to be )?(?:moving|proceeding|progressing|advancing) (?:forward|further) (?:with your|in (?:our|the))",
+    # The plain forms the two above miss: "we will not be moving forward.",
+    # "unable to move your application forward", "can't proceed further".
+    r"\b(?:will not|won['’]?t|are not|aren['’]?t|is not|isn['’]?t|not going to|unable to|not able to|cannot|can['’]?t|not in a position to) "
+    r"(?:be )?(?:mov(?:e|ing)|proceed(?:ing)?|progress(?:ing)?|advanc(?:e|ing)|continu(?:e|ing)) "
+    r"(?:you |with you |your (?:application|candidacy) )?(?:forward|further|ahead)\b(?! (?:until|unless|without|before))",
 
     # ── "decision not to" / "decision (was) made" family — Veeva, Workday ─
     r"\b(?:made (?:the |a )?)?decision (?:not |against )to (?:move|go|proceed|continue) forward\b",
@@ -1226,12 +1619,6 @@ _REJECTION_PATTERNS = [
     r"\bnot to (?:move|go|proceed) forward (?:at this time|with your|in (?:our|the))",
     r"\bdecision has been made not to\b",
 
-    # ── "regret / unfortunately" family ───────────────────────────────────
-    r"\bwe regret to (?:inform|let you know|share)\b",
-    r"\bunfortunately[,]?\s+(?:we|after|at this time|the (?:hiring|recruiting) team|your)\b",
-    r"\b(?:i|we)['’]?m sorry (?:to (?:inform|let you know|share)|but)\b",
-    r"\bregretfully\b",
-
     # ── "after careful review" follow-up phrases ─────────────────────────
     r"\bafter (?:careful |thorough |a careful |much )?(?:consideration|review|deliberation)[,]?\s+we\b.{0,80}\b(?:not|other|unable|unfortunately|cannot|won['’]?t|will not)\b",
     r"\bafter (?:reviewing|evaluating) your (?:application|resume|profile)[,]? we\b.{0,80}\b(?:not|unable|other|won['’]?t|cannot)\b",
@@ -1239,26 +1626,26 @@ _REJECTION_PATTERNS = [
     # ── "your application was not selected" family ───────────────────────
     r"\byour application (?:was|has been) (?:not selected|unsuccessful|declined|rejected)\b",
     r"\byour application for [^.!?\n]{2,180}? (?:was|has been) (?:not selected|unsuccessful|declined|rejected)\b",
+    r"\b(?:application|candidacy) (?:has been |was |is )(?:unsuccessful|declined|rejected)\b",
+    r"\bnot (?:been )?selected (?:for (?:this|the|that|an?|our|further)|to (?:move|proceed|advance|continue))\b",
     r"\b(?:we are|we['’]?re|i am|i['’]?m) unable to (?:move forward|proceed|offer|continue|advance)\b",
-    r"\bwe['’]ll keep your (?:resume|application|profile|materials) on file\b",
-    r"\b(?:keep|hold) your (?:resume|application|profile) (?:on file )?for future\b",
-    r"\b(?:resume|application) (?:on file|in our (?:talent|candidate) (?:pool|community|database))\b",
+    r"\b(?:unable|not able) to offer you (?:a|an|the|this) (?:position|role|job|interview|offer)\b",
+    r"\bwill not be (?:extending|making) (?:you )?an offer\b",
 
     # ── "no longer / not progressing" ────────────────────────────────────
     r"\bno longer (?:under |being )?consider(?:ed|ation)\b",
-    r"\b(?:application|candidacy) (?:has been |is no longer )?(?:closed|withdrawn|inactive)\b",
     r"\bdid not select(?:ed)? (?:your|you for)\b",
     r"\bnot (?:moving|proceeding|progressing|advancing) (?:forward|further) with your\b",
 
     # ── "position filled" family ─────────────────────────────────────────
     r"\b(?:the |this |that )?position (?:has been |was )?(?:already )?filled\b",
+    r"\b(?:position|role)\b[^.!?\n]{0,80}?\b(?:has been|was|is now) (?:already )?filled\b",
     r"\bwe (?:have )?filled (?:the|this|that) (?:position|role|opening|vacancy)\b",
     r"\b(?:the |this )?role (?:has been |is now )?(?:closed|filled|no longer (?:open|available))\b",
     r"\b(?:requisition|req) (?:has been |is )?(?:closed|filled|cancelled)\b",
-
-    # ── well-wish closer (often the final sentence of a rejection) ───────
-    r"\bwish you (?:the best|all the best|success|continued success) (?:(?:in|with) (?:your|future)\s*)?(?:job\s+search|future endeavors|career|search|future)\b",
-    r"\bbest (?:of luck|wishes) (?:in|with) (?:your|the)\s*(?:job\s+search|future|search|endeavors)\b",
+    r"\b(?:position|role|job|requisition|opening) (?:has been|is|was) (?:cancell?ed|put on hold|placed on hold|no longer available)\b",
+    r"\bno longer (?:hiring|recruiting) for (?:this|the|that)\b",
+    r"\bdecided to (?:close|cancel|pause) (?:this|the|that) (?:position|role|search|requisition|opening)\b",
 
     # ── "not a match / not a fit" with negative framing ──────────────────
     r"\bnot (?:a (?:strong |good |the right |an ideal )?(?:match|fit)|the (?:right|best) fit)\b.{0,40}\b(?:for (?:the|this)|at this time)\b",
@@ -1282,13 +1669,51 @@ _REJECTION_PATTERNS = [
     r"\bwe (?:are|are currently) pursuing (?:other|another) candidate",
 ]
 
+# Decline-sounding words that also open ordinary messages ("Unfortunately, we
+# need to reschedule"). One of these alone is a question for the user, never a
+# status change. Two, or one beside a closing line below, read as a decline.
+_SOFT_REJECTION_PATTERNS = [
+    r"\bunfortunately[,]?\s+(?:we|after|at this time|the (?:hiring|recruiting) team|your)\b",
+    r"\b(?:i|we)(?:['’]?m|['’]?re| am| are) sorry (?:to (?:inform|let you know|share)|but)\b",
+    r"\bregretfully\b",
+    r"\bwe regret to (?:inform|let you know|share)\b",
+    r"\b(?:application|candidacy) (?:has been |is no longer )?(?:closed|inactive)\b",
+]
+# Lines that end a decline and also end plenty of receipts ("we will keep your
+# resume on file"). They support a soft decline; alone they mean nothing.
+_CLOSING_LINE_PATTERNS = [
+    r"\bwe['’]ll keep your (?:resume|application|profile|materials) on file\b",
+    r"\b(?:keep|hold) your (?:resume|application|profile) (?:on file )?for future\b",
+    r"\b(?:resume|application) (?:on file|in our (?:talent|candidate) (?:pool|community|database))\b",
+    r"\bwish you (?:the best|all the best|success|continued success) (?:(?:in|with) (?:your|future)\s*)?(?:job\s+search|future endeavors|career|search|future)\b",
+    r"\bbest (?:of luck|wishes) (?:in|with) (?:your|the)\s*(?:job\s+search|future|search|endeavors)\b",
+]
+# "Unfortunately we need to move our call" is scheduling, not a decision.
+_RESCHEDULE_PATTERN = re.compile(
+    r"\b(?:reschedul\w+|postpon\w+|push(?:ed|ing)? (?:back|out)|"
+    r"mov(?:e|ed|ing) (?:our|your|the|this) (?:call|interview|meeting|chat|conversation|time|slot)|"
+    r"running (?:late|behind)|another time|new time|different time|delay(?:ed)?|"
+    r"technical (?:issue|difficult\w+)|out (?:sick|of (?:the )?office)|scheduling conflict)\b", re.IGNORECASE)
+
+# The candidate left the process. That is "withdrawn", never "rejected".
+_WITHDRAWN_PATTERNS = [
+    r"\b(?:application|candidacy) (?:has been|was|is) (?:successfully )?withdrawn\b",
+    r"\b(?:application|candidacy)\b[^.!?\n]{0,120}?\b(?:has been|was) (?:successfully )?withdrawn\b",
+    r"\byou (?:have )?(?:successfully )?withdr(?:awn|ew) (?:your|from)\b",
+    r"\b(?:received|confirm(?:ing|ed)?|processed) your (?:request to withdraw|withdrawal)\b",
+    r"\bremoved you from (?:this|the|our) (?:process|consideration)[^.!?\n]{0,40}\bat your request\b",
+]
+
+# An offer names what is being offered. "Pleased to offer you the chance to
+# interview" and "any offer of employment is contingent on a background check"
+# both used to read as offers.
+_OFFERED = r"(?:the |a |an |this |our )?(?:full[- ]time |part[- ]time |summer |internship |contract |permanent )*(?:position|role|job|internship|employment|opportunity to join)"
 _OFFER_PATTERNS = [
     # ── canonical offer phrasing ─────────────────────────────────────────
-    r"\b(?:we are |we['’]?re |i am |i['’]?m )?pleased to (?:offer|extend (?:an|the) (?:offer|opportunity))\b",
-    r"\bwe['’]re? (?:excited|thrilled|delighted|happy) to (?:offer|extend|present)\b",
-    r"\bwe['’]?d (?:love|like) to (?:formally )?(?:offer|extend (?:an|the) offer)\b",
-    r"\bextending (?:an |the |a formal |our )?offer (?:of |for )?(?:employment|the position|the role)\b",
-    r"\b(?:formal |verbal |written )?offer of employment\b",
+    r"\b(?:pleased|delighted|excited|thrilled|happy|glad|like|love) to (?:formally )?offer you " + _OFFERED + r"\b",
+    r"\b(?:pleased|delighted|excited|thrilled|happy|glad|like|love|want(?:ed)?) to (?:formally )?extend (?:you |to you )?(?:an |the |a |our )(?:formal |written |verbal |conditional |contingent )?offer\b",
+    r"\bextend(?:ing|ed)? (?:you |to you )?(?:an |the |a |our )(?:formal |written |verbal |conditional |contingent )?offer of employment\b",
+    r"\b(?:we are|we['’]re|i am|i['’]m) (?:making|extending) you (?:an |a formal )?offer\b",
 
     # ── offer letter mechanics ───────────────────────────────────────────
     r"\boffer letter (?:attached|enclosed|below|is ready|has been (?:sent|generated)|for your review)\b",
@@ -1300,22 +1725,20 @@ _OFFER_PATTERNS = [
     # ── compensation / start-date discussion in offer context ────────────
     r"\b(?:your |the )(?:base salary|annual salary|total compensation|comp package|starting salary|sign[- ]on bonus)\b.{0,60}\b(?:would be|will be|of \$|is \$)",
     r"\bstart(?:ing)? (?:date|day) (?:would be|will be|of) (?:[A-Z][a-z]+\s+\d|the \d|on)\b",
-    r"\b(?:welcome (?:aboard|to the team)|welcome to (?:the )?(?:team|company|family))\b",
     r"\bcongratulations[!.,]\s*[a-z\s]{0,80}\boffer\b",
-    r"\b(?:happy|thrilled|excited) to (?:welcome you|have you join)\b",
 
     # ── ATS-specific offer phrasing ──────────────────────────────────────
     # Greenhouse: "you've been extended an offer"
     r"\byou(?:['’]ve)? been (?:extended|sent|presented) (?:an |the |our )?offer\b",
-    # Workday: "we are excited to extend a formal offer"
-    r"\b(?:formal|written|verbal) offer (?:has been |is being |for|of)\b",
+    # Workday: "a formal offer has been extended"
+    r"\b(?:formal|written|verbal) offer (?:has been|is being) (?:extended|sent|prepared|approved|issued)\b",
 ]
 
 # Interview signals require *human-authored* progression — a scheduled time,
 # Calendly link, hiring-manager intro, or explicit availability ask. We are
 # DELIBERATELY conservative here: any pattern that could match conditional
-# "if you're selected for an interview" boilerplate is excluded — the
-# receipt-only detector handles that case.
+# "if you're selected for an interview" boilerplate is excluded, and a match
+# that follows "if" or "should" in its own sentence is never counted.
 _INTERVIEW_PATTERNS = [
     # ── scheduling links (almost certainly interview-intent) ─────────────
     r"\bcalendly\.com/",
@@ -1324,7 +1747,9 @@ _INTERVIEW_PATTERNS = [
     r"\bcal\.com/",
     r"\b(?:lu\.ma|chronograph\.io|x\.ai)/",
     r"\bgoodtime\.io/",
-    r"\b(?:zoom|google meet|teams|meet\.google\.com|us\d+web\.zoom\.us|teams\.microsoft\.com)/[A-Za-z0-9/_?=&\-]+",
+
+    # ── a calendar invitation for an interview ───────────────────────────
+    r"\b(?:updated )?invitation(?: from [^:\n]{1,60})?: [^\n]{0,120}\b(?:interview|phone screen|technical screen|recruiter screen|onsite|hiring manager)\b",
 
     # ── direct availability / scheduling asks ────────────────────────────
     # Note: "are you available" must be followed by "on/for/to/this/next" so
@@ -1351,7 +1776,9 @@ _INTERVIEW_PATTERNS = [
     r"\b(?:we['’]?d like|we would like|i['’]?d like|i would like) to (?:invite|set up|schedule)\s+(?:you )?(?:for |to )?(?:an? |the )?(?:interview|screen|call|chat|conversation|next (?:round|step|stage))\b",
     r"\b(?:we['’]?re|i['’]?m|we are) (?:inviting|extending an invitation to) you (?:to|for)\b",
     r"\b(?:onsite|virtual onsite|panel|loop) (?:loop|interview|round)\s+(?:with|on|scheduled|confirmed|invitation)\b",
-    r"\bnext (?:round|step|stage) (?:of|in) (?:the|your|our) (?:interview|process)\b",
+    # A receipt's "the next step in our process is a review" is not progress;
+    # being moved to the next step is.
+    r"\b(?:advanc\w+|mov\w+|progress\w+|proceed\w+|invit\w+|selected)\b[^.!?\n]{0,40}\bnext (?:round|step|stage) (?:of|in) (?:the|your|our) (?:interview|hiring|recruiting|recruitment|selection )?\s?process\b",
     r"\bmove(?:d)? (?:you )?(?:forward|on|ahead) to (?:the next|our|a) (?:round|step|stage|interview)\b",
 
     # ── take-home / coding assessments ───────────────────────────────────
@@ -1371,72 +1798,28 @@ _INTERVIEW_PATTERNS = [
     r"\b(?:hirevue|sparkhire|willo|videoask|odro|interviewing\.io)\.(?:com|io)/",
     r"\b(?:karat|byteboard|coderbyte interview|techscreen)\.(?:com|io)/",
 ]
+# A video-call link is an interview only beside interview words. Alone it is
+# just as likely a webinar from a company the user happens to track.
+_MEETING_LINK = re.compile(
+    r"\b(?:zoom|google meet|teams|meet\.google\.com|us\d+web\.zoom\.us|teams\.microsoft\.com)/[A-Za-z0-9/_?=&\-]+",
+    re.IGNORECASE)
+_INTERVIEW_CONTEXT = re.compile(
+    r"\b(?:interview|phone screen|technical screen|recruiter screen|hiring manager|onsite|your candidacy)\b",
+    re.IGNORECASE)
+# A link the candidate is asked to use counts even inside an acknowledgement.
+_ACTION_LINK = re.compile(
+    r"(?:calendly|savvycal|hubspot|cal|goodtime|hackerrank|codility|coderpad|coderbyte|codesignal|"
+    r"hackerearth|hirevue|sparkhire|willo|videoask|karat|byteboard|zoom|meet\.google|teams\.microsoft)"
+    r"\.?[a-z.]*/", re.IGNORECASE)
 
 _REJECTION_REGEX = [re.compile(p, re.IGNORECASE) for p in _REJECTION_PATTERNS]
+_SOFT_REJECTION_REGEX = [re.compile(p, re.IGNORECASE) for p in _SOFT_REJECTION_PATTERNS]
+_CLOSING_LINE_REGEX = [re.compile(p, re.IGNORECASE) for p in _CLOSING_LINE_PATTERNS]
+_WITHDRAWN_REGEX = [re.compile(p, re.IGNORECASE) for p in _WITHDRAWN_PATTERNS]
 _OFFER_REGEX = [re.compile(p, re.IGNORECASE) for p in _OFFER_PATTERNS]
 _INTERVIEW_REGEX = [re.compile(p, re.IGNORECASE) for p in _INTERVIEW_PATTERNS]
 
 
-# "Receipt-only" patterns: phrases that indicate this email is JUST an
-# application acknowledgement, not a progression signal. They look adjacent
-# to interview/decline language ("if you're selected for an interview",
-# "your application is being reviewed") and were the source of false-positive
-# "interviewing" classifications from the LLM (CDW, WorkWhile both used
-# conditional "should you be selected to interview" boilerplate).
-#
-# When a thread fires receipt-only signals AND has NO real interview/decline/
-# offer signal, we hard-force status=applied and override any LLM verdict
-# that disagrees.
-_RECEIPT_ONLY_PATTERNS = [
-    # ── direct receipt acknowledgements ──────────────────────────────────
-    r"\b(?:thanks|thank you|many thanks) for (?:applying|your application|your interest|submitting|taking the time to (?:apply|submit))\b",
-    r"\bwe (?:have |['’]ve )?(?:received|got) your application\b",
-    r"\byour application (?:has been |is currently |was )?(?:received|submitted|on file|in our system)\b",
-    r"\bapplication (?:successfully )?(?:received|submitted|completed)\b",
-    r"\bthis (?:email |message |note )?(?:is to )?confirm(?:s|ation)?\s+(?:we['’]?ve|that we have|the receipt of)\b",
-
-    # ── "is being / will be reviewed" boilerplate ────────────────────────
-    r"\byour application (?:is currently |will be |has been )?(?:being |under |in )?(?:evaluated|reviewed|considered|assessed|in review)\b",
-    r"\b(?:our |the )?(?:team|recruiting team|talent team|hiring team|recruitment team|HR team) (?:will|is going to|is currently) (?:review|evaluate|consider|assess|assessing|reviewing|going through)\b",
-    r"\b(?:reviewing|evaluating|assessing) (?:applications|candidates|profiles|submissions)\b",
-    r"\b(?:we|our team) (?:will|are) (?:carefully )?(?:reviewing|evaluating|going through) (?:all |your )?(?:application|applications|submission)\b",
-
-    # ── CONDITIONAL "if/should you be selected" — the killer false-positive
-    #    pattern. These phrases ALWAYS mean "this is a receipt, not an
-    #    interview" — they describe what would happen IF you were selected.
-    r"\bif (?:you['’]?re|you are) (?:selected|chosen|a (?:good |strong |great |the right )?(?:fit|match)|interested|invited)\b",
-    r"\bshould you be (?:selected|chosen|considered|a fit|a match|invited|moved forward)\b",
-    r"\bshould (?:we|the (?:team|hiring manager)) (?:wish|choose|decide|find)\b",
-    r"\bif (?:there['’]?s|there is) (?:an? |a strong |a good )?(?:match|fit|alignment|opportunity)\b",
-    r"\bif (?:we believe|we think|we feel|we determine|we find)\b.{0,40}\b(?:fit|match|qualified|appropriate)\b",
-    r"\b(?:assuming|provided that|in the event that) (?:you|your application)\b.{0,40}\b(?:selected|moves forward|qualifies|matches|advances)\b",
-
-    # ── "we'll reach out / contact you" futureconditional ───────────────
-    r"\b(?:a )?member of (?:our|the) (?:talent|recruiting|recruitment|hiring|HR) team will (?:reach out|contact|be in touch|follow up)\b",
-    r"\b(?:we|someone|a recruiter|a member of our team) (?:will|may) (?:reach out|contact you|be in touch|follow up) (?:in the coming|within|shortly|soon|if)\b",
-    r"\byou['’]?ll hear (?:back |from us )?(?:from us |back )?(?:as soon as|once|when|if|in the coming)\b",
-    r"\b(?:expect to hear|look forward to hearing) (?:back )?(?:from us )?(?:within|in the next|in the coming)\b",
-    r"\bwe['’]?ll (?:be in touch|follow up|reach out|let you know) (?:if|when|once|shortly|soon|in the coming)\b",
-
-    # ── "encourage you to" / "check back" ─────────────────────────────────
-    r"\bwe encourage you to (?:check back|continue (?:applying|exploring)|apply|browse|look)\b",
-    r"\b(?:check back|visit|browse|explore) (?:our|the) (?:careers? (?:site|page)|job board|opportunities)\b",
-    r"\bnew (?:jobs|roles|opportunities|positions) (?:are |being )?posted (?:regularly|frequently|often|daily|weekly)\b",
-    r"\bnext steps (?:will be|are going to be) (?:shared|communicated) (?:if|with you if|once|when)\b",
-
-    # ── application portal / account creation language ───────────────────
-    r"\b(?:create|set up) (?:an |your |a free )?account (?:on (?:our |the )?(?:career|careers|application|portal|candidate))\b",
-    r"\b(?:track|monitor|view) the (?:status|progress) of your application\b",
-    r"\baction on any potential (?:tasks|next steps)\b",
-    r"\b(?:log|sign) in(?:to)? (?:your |the )?(?:candidate|application) (?:portal|account|dashboard)\b",
-
-    # ── "evaluation in progress" boilerplate ─────────────────────────────
-    r"\b(?:once|when|after) (?:the |our |this )?(?:review|evaluation|assessment|process) is complete\b",
-    r"\b(?:please|kindly) (?:be patient|allow|note that)\b.{0,80}\b(?:review|evaluation|process|response)\b",
-    r"\b(?:due to|given) (?:the |our |a )?(?:high volume|large number) of (?:applications|applicants|candidates)\b",
-    r"\b(?:we (?:appreciate|thank you for) your patience)\b",
-]
-_RECEIPT_ONLY_REGEX = [re.compile(p, re.IGNORECASE) for p in _RECEIPT_ONLY_PATTERNS]
 # Boilerplate can prevent a false interview, but cannot prove a submission.
 # A receipt requires an acknowledgement specifically about the application.
 _APPLICATION_ACK_REGEX = [re.compile(p, re.IGNORECASE) for p in (
@@ -1445,72 +1828,117 @@ _APPLICATION_ACK_REGEX = [re.compile(p, re.IGNORECASE) for p in (
     r"\byour application (?:has been |is currently |was )?(?:successfully )?(?:received|submitted|on file|in our system)\b",
     r"\bapplication (?:successfully )?(?:received|submitted|completed)\b",
     r"\byour application (?:is currently |will be |has been )?(?:being |under |in )?(?:evaluated|reviewed|considered|assessed|in review)\b",
+    r"\byour application was sent to\b",
+    # "Acme viewed your application": nothing changed, but it was submitted.
+    r"\b(?:viewed|opened|is reviewing|has reviewed) your application\b",
+    r"\byour application (?:was|has been) viewed\b",
 )]
 
+# What an outcome phrase must not be the tail of: "if you are selected for an
+# interview, we will schedule a call" describes a possibility, not an event.
+_CONDITIONAL_LEAD = re.compile(
+    r"\b(?:if|unless|whether|in case|in the event|provided that|assuming)\b|(?:^\s*|[,:]\s*)should\b",
+    re.IGNORECASE)
 
-def _scan_patterns(text: str, regexes: List[re.Pattern]) -> Optional[str]:
+
+def _sentence_lead(text: str, start: int) -> str:
+    """The part of the sentence that comes before position `start`."""
+    return text[max(text.rfind(mark, 0, start) for mark in ".!?;\n") + 1:start]
+
+
+def _scan_patterns(text: str, regexes: List[re.Pattern], stated: bool = False) -> Optional[str]:
     """Return the first matching pattern's source phrase, or None.
 
     We surface the matched phrase so reconciliation can include it as the
     `reason` shown in the suggestions UI — users trust the call more when
     they can see the literal sentence that drove it.
+
+    `stated=True` skips a phrase that follows "if"/"should" in its own
+    sentence: only something the email states as fact is an outcome.
     """
     if not text:
         return None
     for rx in regexes:
-        m = rx.search(text)
-        if m:
+        for m in rx.finditer(text):
+            if stated and _CONDITIONAL_LEAD.search(_sentence_lead(text, m.start())):
+                continue
             return m.group(0)[:160]
     return None
+
+
+def _rejection_signal(text: str) -> Optional[Tuple[str, str]]:
+    """(phrase, strength) for decline wording in one email.
+
+    strong        an explicit decision about the application
+    corroborated  soft wording twice, or soft wording with a closing line
+    weak          one soft phrase: worth asking the user, never acted on
+    """
+    phrase = _scan_patterns(text, _REJECTION_REGEX, stated=True)
+    if phrase:
+        return phrase, "strong"
+    soft = [found for found in (_scan_patterns(text, [rx], stated=True) for rx in _SOFT_REJECTION_REGEX)
+            if found]
+    if not soft or _RESCHEDULE_PATTERN.search(text):
+        return None
+    if len(soft) > 1 or _scan_patterns(text, _CLOSING_LINE_REGEX):
+        return soft[0], "corroborated"
+    return soft[0], "weak"
+
+
+_REJECTION_RANK = {"weak": 1, "corroborated": 2, "strong": 3}
 
 
 def extract_deterministic_signals(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Run regex extractors across an application's email bundle.
 
-    Returns a dict with at most one of: rejected, offer, interviewing — plus
-    the matched phrase + the message it came from for traceability. Order of
-    precedence on conflict: rejected > offer > interviewing (a rejection
-    after an offer is rare but real — withdrawn offer; we surface it as a
-    suggestion rather than auto-flipping).
+    Returns a dict with any of: rejected, withdrawn, offer, interviewing,
+    receipt — each with the matched phrase and the message it came from for
+    traceability. Order of precedence on conflict is decided by
+    `reconcile_classification`.
 
     Literal phrases are evidence, not proof of application identity. The
     matcher separately establishes identity before any automatic update.
     """
     # Newest-first processing so an older "applied" receipt doesn't shadow a
     # later rejection — but we still scan ALL messages for any signal.
-    found_rejection: Optional[Tuple[str, Dict[str, Any]]] = None
-    found_offer: Optional[Tuple[str, Dict[str, Any]]] = None
-    found_interview: Optional[Tuple[str, Dict[str, Any]]] = None
-    found_receipt: Optional[Tuple[str, Dict[str, Any]]] = None
+    found: Dict[str, Dict[str, Any]] = {}
 
-    for msg in sorted(messages, key=lambda m: m.get("internal_date") or 0, reverse=True):
+    def keep(kind: str, phrase: str, msg: Dict[str, Any], order: int, **extra: Any) -> None:
+        found[kind] = {"phrase": phrase, "message_id": msg.get("message_id"),
+                       "internal_date": msg.get("internal_date") or 0, "order": order, **extra}
+
+    ordered = sorted(messages, key=lambda m: m.get("internal_date") or 0, reverse=True)
+    for order, msg in enumerate(ordered):
         if _is_irrelevant_mail(msg):
             continue
-        text = _application_text(msg)[:4000]
-        if found_rejection is None:
-            phrase = _scan_patterns(text, _REJECTION_REGEX)
+        text = _application_text(msg)[:BODY_TEXT_LIMIT]
+        rejection = _rejection_signal(text)
+        # The newest decline wins, unless an older email says it more plainly.
+        if rejection and _REJECTION_RANK[rejection[1]] > _REJECTION_RANK.get(
+                (found.get("rejected") or {}).get("strength"), 0):
+            keep("rejected", rejection[0], msg, order, strength=rejection[1])
+        if "withdrawn" not in found:
+            phrase = _scan_patterns(text, _WITHDRAWN_REGEX, stated=True)
             if phrase:
-                found_rejection = (phrase, msg)
-        if found_offer is None:
-            phrase = _scan_patterns(text, _OFFER_REGEX)
+                keep("withdrawn", phrase, msg, order)
+        if "offer" not in found:
+            phrase = _scan_patterns(text, _OFFER_REGEX, stated=True)
             if phrase:
-                found_offer = (phrase, msg)
-        if found_interview is None:
-            phrase = _scan_patterns(text, _INTERVIEW_REGEX)
+                keep("offer", phrase, msg, order)
+        if "interviewing" not in found:
+            phrase = _scan_patterns(text, _INTERVIEW_REGEX, stated=True)
+            if not phrase and _INTERVIEW_CONTEXT.search(text):
+                link = _MEETING_LINK.search(text)
+                phrase = link.group(0)[:160] if link else None
             if phrase:
-                found_interview = (phrase, msg)
-        if found_receipt is None:
+                keep("interviewing", phrase, msg, order, link=bool(_ACTION_LINK.search(phrase)))
+        if "receipt" not in found:
             phrase = _scan_patterns(text, _APPLICATION_ACK_REGEX)
             if phrase:
-                found_receipt = (phrase, msg)
+                keep("receipt", phrase, msg, order)
 
-    out: Dict[str, Any] = {}
-    for status, found in (("rejected", found_rejection), ("offer", found_offer),
-                          ("interviewing", found_interview), ("receipt", found_receipt)):
-        if found:
-            out[status] = {"phrase": found[0], "message_id": found[1].get("message_id"),
-                           "internal_date": found[1].get("internal_date") or 0}
-    return out
+    return {kind: found[kind] for kind in ("rejected", "withdrawn", "offer", "interviewing", "receipt")
+            if kind in found}
 
 
 def reconcile_classification(
@@ -1523,20 +1951,36 @@ def reconcile_classification(
     produced anything actionable.
 
     Precedence (highest → lowest):
-      1. Deterministic REJECTION   → status=rejected, conf=0.97 (overrides everything)
+      0. WITHDRAWAL confirmed      → status=withdrawn, conf=0.95, unless an explicit decline
+                                     is also present (then the decline rules decide).
+      1. Deterministic REJECTION   → status=rejected. conf=0.97 for an explicit decision,
+                                     0.93 for corroborated soft wording, 0.85 (review only)
+                                     for one soft phrase.
       2. Deterministic OFFER       → status=offer, conf=0.96 (overrides everything but rejection)
       3. RECEIPT-ONLY GUARD        → if the thread is just an application receipt (no real
                                      interview/decline/offer signal) the status is "applied",
                                      period. This is what blocks LLM false positives where
                                      "if you're selected for an interview" boilerplate gets
                                      misread as a real interview invite.
-      4. Deterministic INTERVIEW + LLM=interviewing/applied → status=interviewing, conf=0.95
+      4. Deterministic INTERVIEW + LLM=interviewing/applied → status=interviewing, conf=0.95.
+         Interview wording inside the SAME email as the receipt is a question for the user
+         (conf=0.80) unless it is a scheduling or assessment link.
       5. LLM verdict alone         → trust at LLM's stated confidence (capped 0.90 without
                                      deterministic backing — never auto-apply on LLM-only
                                      unless the LLM is genuinely confident)
       6. Deterministic INTERVIEW only (LLM disagreed) → status=interviewing, conf=0.80
          (we trust the regex but flag for review since LLM saw something else)
     """
+    rejection = deterministic.get("rejected")
+    strength = (rejection or {}).get("strength", "strong")
+
+    # 0. The candidate withdrew. An explicit decline still outranks it.
+    if "withdrawn" in deterministic and not (rejection and strength == "strong"):
+        signal = deterministic["withdrawn"]
+        return {"status": "withdrawn", "confidence": 0.95, "source": "deterministic",
+                "evidence_message_id": signal.get("message_id"),
+                "reason": f'Withdrawal confirmed: "{signal["phrase"]}"'}
+
     # A historical rejection must not erase a newer outcome. Conflicting
     # terminal/positive evidence is retained for review instead of guessing.
     outcomes = {k: v for k, v in deterministic.items() if k in ("rejected", "offer", "interviewing")}
@@ -1553,13 +1997,14 @@ def reconcile_classification(
                     "reason": f'Conflicting outcomes need review. Latest evidence: "{signal["phrase"]}"'}
 
     # 1. Current rejection.
-    if "rejected" in deterministic:
+    if rejection:
         return {
             "status": "rejected",
-            "confidence": 0.97,
-            "reason": f'Decline phrase: "{deterministic["rejected"]["phrase"]}"',
+            "confidence": {"strong": 0.97, "corroborated": 0.93}.get(strength, 0.85),
+            "reason": (f'Possible decline, please check: "{rejection["phrase"]}"' if strength == "weak"
+                       else f'Decline phrase: "{rejection["phrase"]}"'),
             "source": "deterministic",
-            "evidence_message_id": deterministic["rejected"].get("message_id"),
+            "evidence_message_id": rejection.get("message_id"),
         }
 
     # 2. Offer.
@@ -1594,13 +2039,26 @@ def reconcile_classification(
     # 4. Deterministic interview + LLM agrees (or LLM still on applied — which
     #    is fine, the regex caught a signal LLM may have under-weighted).
     if "interviewing" in deterministic:
+        interview = deterministic["interviewing"]
+        receipt = deterministic.get("receipt")
+        if receipt and receipt.get("order") == interview.get("order") and not interview.get("link"):
+            # "Thanks for applying ... our team will schedule a call" is how
+            # receipts are written. It may be an invitation; the user decides.
+            return {
+                "status": "interviewing",
+                "confidence": 0.80,
+                "reason": ("Interview wording inside an application receipt, please check: "
+                           f'"{interview["phrase"]}"'),
+                "source": "deterministic",
+                "evidence_message_id": interview.get("message_id"),
+            }
         if llm_status in ("interviewing", "applied", None):
             return {
                 "status": "interviewing",
                 "confidence": 0.95,
-                "reason": f'Interview signal: "{deterministic["interviewing"]["phrase"]}"',
+                "reason": f'Interview signal: "{interview["phrase"]}"',
                 "source": "deterministic+llm" if llm_status == "interviewing" else "deterministic",
-                "evidence_message_id": deterministic["interviewing"].get("message_id"),
+                "evidence_message_id": interview.get("message_id"),
             }
         # LLM said something contradictory (e.g. "rejected" but no decline
         # phrase fired — possible polite rejection). Fall through to LLM.
@@ -1616,9 +2074,9 @@ def reconcile_classification(
         return {
             "status": "interviewing",
             "confidence": 0.80,
-            "reason": f'Interview signal: "{deterministic["interviewing"]["phrase"]}"',
+            "reason": f'Interview signal: "{interview["phrase"]}"',
             "source": "deterministic",
-            "evidence_message_id": deterministic["interviewing"].get("message_id"),
+            "evidence_message_id": interview.get("message_id"),
         }
 
     # 4. LLM-only verdict.
@@ -1906,6 +2364,12 @@ def _apply_status(user_email: str, record_id: str, status: str,
     update = {"$set": updates}
     if evidence_ms:
         update["$max"] = {"application.gmail_evidence_ms": evidence_ms}
+    # The stage was reached when the employer wrote, not when this sync ran.
+    from services import application_stages
+    reached = application_stages.first_reached(
+        status, datetime.fromtimestamp(evidence_ms / 1000, timezone.utc) if evidence_ms else None)
+    if reached:
+        update["$min"] = reached
     res = db.tailoring_records.update_one(
         query,
         update,
@@ -1983,11 +2447,16 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
     since = conn.get("last_synced_at")
     if isinstance(since, datetime) and since.tzinfo is None:
         since = since.replace(tzinfo=timezone.utc)
+    # The last finished scan used older rules: read the whole window again so
+    # mail those rules could not read is not lost behind the watermark.
+    if since is not None and not conn.get("scan_query") and int(conn.get("scan_version") or 1) < SCAN_VERSION:
+        since = None
     first_scan = since is None
     if since is not None and not conn.get("scan_query"):
         since = _since_for_new_records(since, records)
+    recruiter_emails = [rec["recruiter_email"] for rec in index if rec["recruiter_email"]]
     try:
-        messages = fetch_recent_messages(user_email, since)
+        messages = fetch_recent_messages(user_email, since, recruiter_emails)
     except GmailAPIError as e:
         # Don't poison last_synced_at — caller (route) can show a user-facing
         # error and the next sync will retry the same window.
@@ -2072,6 +2541,13 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
         # later fails, so a clear "we have decided to move forward with other
         # candidates" still resolves to rejected.
         deterministic = extract_deterministic_signals([it["msg"] for it in items])
+        if rec_meta.get("requires_application_match") and not any(
+                kind in deterministic for kind in ("receipt", "rejected", "offer", "withdrawn")):
+            # An email about a role that is not tracked is worth showing only
+            # when it shows the user applied. A stranger asking "are you
+            # available for a call" about some other job is not that.
+            ignored += len(items)
+            continue
 
         # Tier 2: LLM thread classification. May return None on transient
         # failure — that's fine, deterministic alone can carry the decision.
@@ -2123,7 +2599,12 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
         identity = "|".join([user_email, new_status or "needs_review", *sorted(msg_ids),
                              *sorted(r["record_id"] for r in rec_meta["candidate_records"])])
         suggestion_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
-        if _suggestions().find_one({"_id": suggestion_id, "user_email": user_email}):
+        if _suggestions().find_one({"_id": suggestion_id, "user_email": user_email}, {"_id": 1}):
+            # Already recorded. If it was written before the scan could tell
+            # hiring mail from other mail, this read has just vouched for it.
+            _suggestions().update_one(
+                {"_id": suggestion_id, "user_email": user_email, "scan_version": {"$exists": False}},
+                {"$set": {"scan_version": SCAN_VERSION}})
             continue
 
         if new_status and rec_meta["current_status"] == new_status and not rec_meta["requires_record_selection"]:
@@ -2217,6 +2698,7 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
             "dismissed": False,
             "auto_applied": False,
             "sync_run_id": run_id,
+            "scan_version": SCAN_VERSION,
             "created_at": datetime.now(timezone.utc),
         }
 
@@ -2269,18 +2751,23 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
         "model_calls": model_calls,
         "has_more": bool(getattr(messages, "next_page_token", None)),
         "tracked_applications": len(index),
+        "skipped_own": int(getattr(messages, "skipped_own", 0) or 0),
     }
     if first_scan:
         summary["window_days"] = INITIAL_LOOKBACK_DAYS
     summary["outcome"] = _run_outcome(summary)
     state = {"last_sync_summary": summary}
+    batch_version = int(getattr(messages, "scan_version", SCAN_VERSION) or SCAN_VERSION)
     if summary["has_more"]:
         state.update({"scan_next_page_token": messages.next_page_token,
-                      "scan_query": messages.scan_query, "scan_before": messages.scan_before})
+                      "scan_query": messages.scan_query, "scan_before": messages.scan_before,
+                      "scan_cursor_version": batch_version})
         update = {"$set": state}
     else:
         state["last_synced_at"] = getattr(messages, "scan_before", None) or datetime.now(timezone.utc)
-        update = {"$set": state, "$unset": {"scan_next_page_token": "", "scan_query": "", "scan_before": ""}}
+        state["scan_version"] = batch_version
+        update = {"$set": state, "$unset": {"scan_next_page_token": "", "scan_query": "",
+                                            "scan_before": "", "scan_cursor_version": ""}}
     completed = _connections().update_one({"user_email": user_email, "sync_lock_id": lock_id}, update)
     if not completed.matched_count:
         raise GmailSyncError("Gmail connection changed during sync. Start a new sync for the "
@@ -2539,6 +3026,10 @@ def status_payload(user_email: str, light: bool = False) -> Dict[str, Any]:
     }
     if not configured:
         return payload
+    # Whether this person may start Google's screen at all (see
+    # gmail_access_service): `gate`, `state`, and the address they asked for.
+    from services import gmail_access_service
+    payload["access"].update(gmail_access_service.access_for(user_email, bool(conn)))
     payload["tracked_applications"] = DBConnect().get_db().tailoring_records.count_documents(
         {"user_email": user_email})
     if not conn:
@@ -2676,6 +3167,12 @@ def undo_auto_apply(user_email: str, suggestion_id: str) -> Dict[str, Any]:
         update["$unset"] = {key: "" for key in (
             "application.applied_at", "application.applied_at_source",
             "application.applied_date", "application.applied_tz")}
+    # Forget the stage date this move wrote, and only that one: an application
+    # that had reached the stage before keeps its earlier date.
+    stage_date = _as_utc((application.get("stage_dates") or {}).get(to_status))
+    moved_at = _as_utc(s.get("email_received_at"))
+    if stage_date and moved_at and abs((stage_date - moved_at).total_seconds()) < 2:
+        update.setdefault("$unset", {})[f"application.stage_dates.{to_status}"] = ""
     restored = db.tailoring_records.update_one(
         {"record_id": s["record_id"], "user_email": user_email, "application.status": to_status},
         update)
@@ -2739,6 +3236,12 @@ def _validated_suggestion(s: Dict[str, Any], index: List[Dict[str, Any]]) -> Opt
     if s.get("applied") or s.get("dismissed"):
         return dict(s)
     if _is_irrelevant_mail(s):
+        return None
+    # A row from before scans could tell hiring mail from other mail. If what
+    # was kept of the email (subject and excerpt) never mentions hiring, it
+    # would not be written today, so it is not shown. Nothing is deleted: the
+    # next scan re-reads the email and marks the row if it belongs.
+    if not s.get("scan_version") and s.get("subject") and s.get("snippet") and not _about_an_application(s):
         return None
     recovering_match = bool(s.get("requires_application_match"))
     # Snippets are partial; only a subject employer can reassign legacy choices.
