@@ -508,6 +508,11 @@ def ats_scores():
             "record_id": meta["record_id"],
             "version_id": meta["version_id"],
         }
+        # Optional: the resume this was tailored from, scored by the same
+        # rules so the result can show before and after (`ats_before`).
+        source_resume = data.get("source_resume")
+        if isinstance(source_resume, dict) and source_resume:
+            payload["source_resume"] = source_resume
         try:
             from services import assessment_service as _assess
             if _assess.enabled():

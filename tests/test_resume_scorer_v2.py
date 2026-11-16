@@ -1,7 +1,9 @@
 """Hybrid ATS scorer — offline tests.
 
-The LLM scanner pass is faked (or forced to fail) in every test; the pdf
-parseability check is patched where a clean parse is needed. No Mongo.
+`overall` is the ATS score (services/ats_score.py) since ats-1.0; requirement
+coverage stays as `keyword_match` / `skills_alignment`. The model review pass
+is off by default and is faked (or forced to fail) where a test turns it on;
+the pdf parseability check is patched where a clean parse is needed. No Mongo.
 """
 import pytest
 
@@ -110,6 +112,7 @@ def patch_pdf_check(monkeypatch, score=100, **check_overrides):
 
 
 def test_hybrid_shape_is_internal_coverage(monkeypatch, fake_review):
+    monkeypatch.setenv("ATS_AI_REVIEW_ENABLED", "true")
     patch_pdf_check(monkeypatch)
     result = ResumeScorer().score(RESUME, JD, pdf_bytes=b"%PDF-fake")
 
@@ -124,11 +127,29 @@ def test_hybrid_shape_is_internal_coverage(monkeypatch, fake_review):
     assert not result.get("scanners")
 
 
-def test_overall_is_required_term_coverage(monkeypatch, fake_review):
+def test_overall_is_the_ats_score_and_coverage_is_kept(monkeypatch, fake_review):
     patch_pdf_check(monkeypatch, score=100)
     r = ResumeScorer().score(RESUME, JD, pdf_bytes=b"%PDF-fake")
-    assert r["overall"] == r["skills_alignment"]
+    assert r["overall"] == r["ats"]["score"] and r["ats"]["version"] == "ats-1.0"
+    assert r["skills_alignment"] == 100, "coverage is still reported beside the score"
     assert r["coverage_denominator"] == 3  # Python, AWS, Docker
+    assert r["suggestions"][:len(r["ats"]["fixes"])] == r["ats"]["fixes"]
+
+
+def test_no_model_call_by_default(monkeypatch):
+    import services.claude_client as cc
+    monkeypatch.setattr(cc, "claude_json", lambda *a, **kw: pytest.fail("scoring must not call a model"))
+    patch_pdf_check(monkeypatch)
+    r = ResumeScorer().score(RESUME, JD, pdf_bytes=b"%PDF-fake")
+    assert isinstance(r["overall"], int) and "scanners_simulated" not in r
+
+
+def test_the_original_resume_is_scored_by_the_same_rules(monkeypatch):
+    patch_pdf_check(monkeypatch)
+    thin = dict(RESUME, experience=[dict(RESUME["experience"][0], bullets=["Wrote code for the team"])])
+    r = ResumeScorer().score(RESUME, JD, pdf_bytes=b"%PDF-fake", source_resume=thin)
+    assert set(r["ats_before"]) == {"version", "score", "band", "label"}
+    assert r["ats_before"]["score"] < r["overall"]
 
 
 def test_imperfect_parse_caps_overall(monkeypatch, fake_review):
@@ -150,6 +171,7 @@ def test_empty_jd_keyword_match_is_complete(monkeypatch, fake_review):
 
 
 def test_ai_failure_still_scores(monkeypatch, broken_review):
+    monkeypatch.setenv("ATS_AI_REVIEW_ENABLED", "true")
     patch_pdf_check(monkeypatch)
     r = ResumeScorer().score(RESUME, JD, pdf_bytes=b"%PDF-fake")
     assert r["keyword_match"] > 0

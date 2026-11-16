@@ -73,6 +73,14 @@ def _classify_missing_keywords(missing: List[str]) -> Dict[str, List[str]]:
     return {"skills": skills, "logistics": logistics, "compliance": compliance}
 
 
+def _ai_review_enabled() -> bool:
+    """The model review pass (vendor 'scanner' guesses, suggestions). Off by
+    default since ats-1.0: it cost a model call per score and its numbers were
+    never measured. ATS_AI_REVIEW_ENABLED=true brings it back."""
+    import os
+    return (os.getenv("ATS_AI_REVIEW_ENABLED") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 class ResumeScorer:
     """Hybrid ATS scorer: deterministic ground truth + AI semantic assessment."""
 
@@ -83,6 +91,7 @@ class ResumeScorer:
         pdf_bytes: bytes | None = None,
         render_error: str | None = None,
         page_outcome: str | None = None,
+        source_resume: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """Run full hybrid scoring pipeline. Returns validated ATS scores dict.
 
@@ -123,13 +132,15 @@ class ResumeScorer:
             from services.tailoring_assessment import score_payload
             return score_payload(tailored, jd_analysis, pdf_bytes, render_error)
         det = self._deterministic_scores(tailored, jd_analysis)
-        # Pass the deterministic results into the AI scorer so the scanner
-        # scores reconcile with them rather than being independent guesses.
-        try:
-            ai = self._ai_scores(tailored, jd_analysis, det_facts=det)
-        except Exception as e:
-            logger.warning("AI review pass failed; leaving those checks unavailable: %s", e)
-            ai = {}
+        # The model review only guessed per-vendor "scanner" numbers and a few
+        # suggestions; the ATS score below needs neither. Off unless asked for.
+        ai = {}
+        if _ai_review_enabled():
+            try:
+                ai = self._ai_scores(tailored, jd_analysis, det_facts=det)
+            except Exception as e:
+                logger.warning("AI review pass failed; leaving those checks unavailable: %s", e)
+                ai = {}
         combined = self._combine(det, ai, pdf_checked=bool(pdf_bytes))
         if render_error:
             combined["render_error"] = render_error
@@ -144,6 +155,7 @@ class ResumeScorer:
             det.get("missing_keywords", [])
         )
 
+        pdf_check = None
         if pdf_bytes:
             try:
                 from services.pdf_ats_check import check_pdf_parseability
@@ -153,14 +165,29 @@ class ResumeScorer:
                 combined["pdf_parseable_score"] = pdf_check["pdf_parseable_score"]
                 combined["pdf_parseable_checks"] = pdf_check["checks"]
                 combined["pdf_parseable_warnings"] = pdf_check["warnings"]
-                # Fold parseability into overall — heavy weight because a
-                # PDF that doesn't parse means EVERY other ATS metric is
-                # moot (the parser never gets to keyword matching).
-                if pdf_check["pdf_parseable_score"] < 100 and isinstance(combined.get("overall"), (int, float)):
-                    overall_cap = pdf_check["pdf_parseable_score"] + 5
-                    combined["overall"] = min(combined["overall"], overall_cap)
             except Exception as e:
                 logger.warning("PDF parseability check failed: %s", e)
+
+        # THE number (services/ats_score.py): strict, deterministic, explained.
+        # `overall` carries it so every stored record and list reads one score;
+        # requirement coverage stays available as `keyword_match`.
+        from services import ats_score
+        try:
+            ats = ats_score.score(tailored, jd_analysis, pdf_check=pdf_check, render_error=render_error)
+            combined["ats"] = ats
+            combined["score_version"] = ats["version"]
+            if ats["score"] is not None:
+                combined["overall"] = ats["score"]
+                combined["overall_unavailable"] = False
+            # Its next steps lead the suggestions list.
+            combined["suggestions"] = list(dict.fromkeys(
+                list(ats.get("fixes") or []) + [x for x in combined.get("suggestions") or []
+                                                 if x != "No suggestions available"]))[:8] \
+                or ["No suggestions available"]
+            if isinstance(source_resume, dict) and source_resume:
+                combined["ats_before"] = ats_score.compact(ats_score.score(source_resume, jd_analysis))
+        except Exception as e:  # pragma: no cover - the coverage number still stands
+            logger.warning("ATS score failed, keeping coverage as overall: %s", e)
 
         return combined
 
