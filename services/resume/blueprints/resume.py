@@ -4237,6 +4237,18 @@ def career_copilot_playground_evaluate():
 #   6. POST /gmail/suggestions/<id>/apply  → confirm and apply a suggested status change.
 #   7. POST /gmail/suggestions/<id>/dismiss → discard a suggestion.
 #   8. POST /gmail/disconnect              → revoke + remove the link.
+#   9. GET  /gmail/activity                → what sync changed by itself.
+#  10. POST /gmail/suggestions/<id>/undo   → put an automatic move back.
+#
+# Contract: docs/specs/gmail-tracker-contract.md. Every failure answers with a
+# sentence written for the user plus a stable `code`; exception text and
+# provider bodies never reach a response, and no Gmail failure is a 401.
+
+_GMAIL_UNAVAILABLE = ("Gmail connection is not available right now.", "gmail_unavailable")
+
+
+def _gmail_error(message, code, status):
+    return jsonify({"error": message, "code": code}), status
 
 
 @resume_bp.route("/gmail/status", methods=["GET"])
@@ -4249,24 +4261,15 @@ def gmail_status():
         logger.exception("gmail import failed: %s", e)
         return jsonify({"error": "Gmail integration unavailable"}), 500
 
-    # `configured` reflects BOTH creds AND the GMAIL_OAUTH_ENABLED kill-switch,
-    # so the FE hides the connect UI when the readonly scope is disabled.
-    configured = gmail_service.gmail_configured() and gmail_service.gmail_oauth_enabled()
-    conn = gmail_service.get_connection(user_email) if configured else None
-    pending = 0
-    if conn:
-        # Count the complete validated review list, including
-        # the same evidence exclusions used by GET /gmail/suggestions.
-        pending = len(gmail_service.list_suggestions(user_email, limit=None))
-    return jsonify({
-        "configured": configured,
-        "connected": bool(conn),
-        "gmail_address": (conn or {}).get("gmail_address"),
-        "last_synced_at": (conn or {}).get("last_synced_at").isoformat() if conn and conn.get("last_synced_at") else None,
-        "pending_suggestions": pending,
-        "has_more": bool((conn or {}).get("scan_next_page_token")),
-        "last_sync_summary": (conn or {}).get("last_sync_summary"),
-    }), 200
+    # `configured` reflects creds, the token encryption key AND the
+    # GMAIL_OAUTH_ENABLED kill-switch, so the FE never offers a Connect that
+    # cannot finish. `?light=1` skips the review count while a client polls.
+    light = request.args.get("light", "").lower() in {"1", "true"}
+    try:
+        return jsonify(gmail_service.status_payload(user_email, light=light)), 200
+    except Exception as e:
+        logger.exception("gmail status error: %s", e)
+        return _gmail_error("Could not check your Gmail connection.", "gmail_error", 500)
 
 
 @resume_bp.route("/gmail/auth-url", methods=["GET"])
@@ -4275,42 +4278,53 @@ def gmail_auth_url():
     user_email = get_jwt_identity()
     from services import gmail_service
     # Kill-switch: block the gmail.readonly consent flow independent of creds.
-    if not gmail_service.gmail_oauth_enabled():
-        return jsonify({"error": "Gmail integration is disabled"}), 503
-    if not gmail_service.gmail_configured():
-        return jsonify({"error": "Gmail OAuth is not configured on the server"}), 503
+    if not gmail_service.gmail_oauth_enabled() or not gmail_service.gmail_configured():
+        return _gmail_error(*_GMAIL_UNAVAILABLE, 503)
     try:
         url = gmail_service.build_auth_url(user_email)
         return jsonify({"auth_url": url}), 200
     except Exception as e:
         logger.exception("gmail auth-url error: %s", e)
-        return jsonify({"error": "Failed to build Gmail auth URL"}), 500
+        return _gmail_error("Could not start the Google sign-in. Try again in a moment.",
+                            "gmail_error", 500)
 
 
 @resume_bp.route("/gmail/callback", methods=["POST"])
 @jwt_required()
 def gmail_callback():
     user_email = get_jwt_identity()
-    data = request.get_json(force=True) or {}
-    code = (data.get("code") or "").strip()
-    state = (data.get("state") or "").strip()
+    data = request.get_json(silent=True)
+    data = data if isinstance(data, dict) else {}
+    code, state = data.get("code"), data.get("state")
+    code = code.strip() if isinstance(code, str) else ""
+    state = state.strip() if isinstance(state, str) else ""
     if not code or not state:
-        return jsonify({"error": "code and state are required"}), 400
+        return _gmail_error("The Google sign-in did not come back complete. Connect Gmail again.",
+                            "missing_params", 400)
 
     from services import gmail_service
     # Kill-switch: refuse to complete a readonly-scope grant when disabled.
-    if not gmail_service.gmail_oauth_enabled():
-        return jsonify({"error": "Gmail integration is disabled"}), 503
+    if not gmail_service.gmail_oauth_enabled() or not gmail_service.gmail_configured():
+        return _gmail_error(*_GMAIL_UNAVAILABLE, 503)
+    # The state is bound to the account that asked for it. This comparison is
+    # what stops a consent link sent to someone else from attaching THEIR
+    # mailbox to the sender's account, so the route keeps @jwt_required.
     issued_to = gmail_service.consume_state(state)
     if not issued_to or issued_to != user_email:
-        return jsonify({"error": "Invalid or expired OAuth state"}), 400
+        error = gmail_service.GmailLinkError("state_invalid")
+        return _gmail_error(str(error), error.code, error.http_status)
     try:
         tokens = gmail_service.exchange_code_for_tokens(code)
         result = gmail_service.store_connection(user_email, tokens)
         return jsonify({"connected": True, **result}), 200
+    except gmail_service.GmailLinkError as e:
+        logger.warning("gmail callback refused: code=%s", e.code)
+        return _gmail_error(str(e), e.code, e.http_status)
     except Exception as e:
+        # Never the exception text: it can name hosts, keys or provider bodies.
         logger.exception("gmail callback error: %s", e)
-        return jsonify({"error": str(e)[:240] or "Failed to link Gmail"}), 500
+        return _gmail_error("Gmail could not be connected because of a problem on Aspirely's side. "
+                            "Try again in a few minutes.", "gmail_error", 500)
 
 
 @resume_bp.route("/gmail/sync", methods=["POST"])
@@ -4320,29 +4334,76 @@ def gmail_sync():
     client_ip = get_client_ip(request)
     limiter = get_rate_limiter()
     if limiter.is_rate_limited(f"gmail_sync:{user_email}:{client_ip}", max_requests=6, window_seconds=300):
-        return jsonify({"error": "Sync rate limit hit. Try again in a few minutes."}), 429
+        return jsonify({"error": "You have started several syncs in a few minutes. "
+                                 "Wait 5 minutes and try again.",
+                        "code": "rate_limited", "retry_after_seconds": 300}), 429
 
     # Kill-switch: no readonly-scope reads when the flag is off.
     from services import gmail_service
-    if not gmail_service.gmail_oauth_enabled():
-        return jsonify({"error": "Gmail integration is disabled"}), 503
-    # Quick guard so we don't bother dispatching when the user isn't linked.
-    if not gmail_service.get_connection(user_email):
-        return jsonify({"error": "Gmail is not connected"}), 400
+    if not gmail_service.gmail_oauth_enabled() or not gmail_service.gmail_configured():
+        return _gmail_error(*_GMAIL_UNAVAILABLE, 503)
+    conn = gmail_service.get_connection(user_email)
+    if not conn:
+        return _gmail_error("Gmail is not connected.", "gmail_not_connected", 400)
+    if conn.get("needs_reconnect"):
+        error = gmail_service.GmailReconnectRequired(conn.get("reconnect_reason") or "")
+        return _gmail_error(str(error), error.code, 409)
 
-    # Run the sync as an async job — Gmail listing + per-match classifier
-    # calls easily exceed API Gateway's 29s ceiling. The job_id flows back
-    # to the UI which polls /resume/job/<id> until complete.
+    # One press is one RUN: job slices that chain until the mailbox window is
+    # finished. The client follows it through GET /gmail/status, not the job.
     try:
+        run = gmail_service.start_run(user_email, "manual")
+        if run["already_running"]:
+            return jsonify({"ok": True, "run_id": run["run_id"], "status": "running",
+                            "already_running": True}), 202
         from services.resume_service import get_resume_service, ResumeService
         svc = get_resume_service()
-        payload = {"user_email": user_email}
-        job_id = svc.create_job("gmail_sync", payload, user_email=user_email)
-        ResumeService.invoke_async(job_id, "gmail_sync", payload)
-        return jsonify({"ok": True, "job_id": job_id, "status": "started"}), 202
+        payload = {"user_email": user_email, "run_id": run["run_id"], "trigger": "manual"}
+        try:
+            job_id = svc.create_job("gmail_sync", payload, user_email=user_email)
+            ResumeService.invoke_async(job_id, "gmail_sync", payload)
+        except Exception:
+            gmail_service.pause_run(user_email, run["run_id"])
+            raise
+        return jsonify({"ok": True, "job_id": job_id, "run_id": run["run_id"],
+                        "status": "started"}), 202
     except Exception as e:
         logger.exception("gmail sync dispatch error: %s", e)
-        return jsonify({"error": "Failed to start Gmail sync"}), 500
+        return _gmail_error("Could not start the Gmail sync. Try again in a moment.",
+                            "gmail_error", 500)
+
+
+@resume_bp.route("/gmail/activity", methods=["GET"])
+@jwt_required()
+def gmail_activity():
+    user_email = get_jwt_identity()
+    from services import gmail_service
+    try:
+        limit = max(1, min(int(request.args.get("limit", "20")), 50))
+    except (TypeError, ValueError):
+        return jsonify({"error": "limit must be a number"}), 400
+    try:
+        return jsonify({"changes": gmail_service.list_activity(user_email, limit=limit)}), 200
+    except Exception as e:
+        logger.exception("gmail activity error: %s", e)
+        return _gmail_error("Could not load what Gmail changed.", "gmail_error", 500)
+
+
+@resume_bp.route("/gmail/suggestions/<suggestion_id>/undo", methods=["POST"])
+@jwt_required()
+def gmail_undo_auto_apply(suggestion_id):
+    user_email = get_jwt_identity()
+    from services import gmail_service
+    try:
+        return jsonify(gmail_service.undo_auto_apply(user_email, suggestion_id)), 200
+    except LookupError:
+        return jsonify({"error": "Update not found"}), 404
+    except gmail_service.GmailUndoError as e:
+        return _gmail_error(str(e), e.code, 409)
+    except Exception as e:
+        logger.exception("gmail undo error: %s", e)
+        return _gmail_error("Could not undo this update. Change the status on the application "
+                            "instead.", "gmail_error", 500)
 
 
 @resume_bp.route("/gmail/suggestions", methods=["GET"])

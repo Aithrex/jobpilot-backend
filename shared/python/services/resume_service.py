@@ -1531,9 +1531,32 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             # Gmail sync can scan dozens of messages and run an LLM classifier
             # per match — easily blows past API Gateway's 29s. Done async so the
             # HTTP route can return 202 immediately and the UI polls /job/<id>.
-            from services.gmail_service import sync_user
+            #
+            # One job is one SLICE of a run (about 90 seconds of batches). If
+            # mail remains it starts the next slice, so one press reads the
+            # whole window while a deploy's graceful stop never waits on it.
+            # Progress lives on the connection (`sync_run`) and is read through
+            # GET /gmail/status, so it survives a reload and a lost slice.
+            from services import gmail_service
             user_email = payload["user_email"]
-            summary = sync_user(user_email)
+            try:
+                summary = gmail_service.run_slice(
+                    user_email, payload.get("run_id"), trigger=payload.get("trigger", "manual"))
+            except gmail_service.GmailSyncError as e:
+                logger.warning(f"Job {job_id} (gmail_sync) failed: code={e.code}")
+                svc.fail_job(job_id, str(e), error_code=e.code)
+                return
+            if summary.get("continue"):
+                next_payload = {**payload, "run_id": summary["run_id"]}
+                try:
+                    next_id = svc.create_job("gmail_sync", next_payload, user_email=user_email)
+                    ResumeService.invoke_async(next_id, "gmail_sync", next_payload)
+                    summary["next_job_id"] = next_id
+                except Exception as e:
+                    # The pool is closing for a deploy. The scheduled sync
+                    # (gmail_sync, every 30 minutes) continues a paused run.
+                    logger.warning(f"gmail_sync continuation not started: {type(e).__name__}")
+                    gmail_service.pause_run(user_email, summary["run_id"])
             svc.complete_job(job_id, summary)
             return
 
