@@ -11,7 +11,7 @@ import sys
 import pytest
 from bson import ObjectId
 
-from _vg_support import current_db, load_service_app
+from _vg_support import current_db, load_service_app, sign_up
 
 PASSWORD = "Str0ng!Pass1"
 USER = "privacy.user@example.com"
@@ -32,7 +32,7 @@ def _offline(monkeypatch):
 def db():
     database = current_db()
     from services import account_service
-    names = {"users", "rate_limit_buckets", "email_suppressions", "mail_aliases",
+    names = {"users", "rate_limit_buckets", "auth_email_codes", "email_suppressions", "mail_aliases",
              "guest_sessions", "application_answer_library", "application_profiles",
              "auto_apply_answers", "visa_profiles", "user_preferences", "notification_prefs"}
     names.update(c for c, _ in account_service.CASCADE_COLLECTIONS)
@@ -144,8 +144,7 @@ def test_put_privacy_on_a_closed_account_is_403(app, db):
 # ---------------------------------------------------------------------------
 def test_gpc_is_recorded_on_privacy_login_and_verify(app, db):
     client = app.test_client()
-    assert client.post("/api/auth/register",
-                       json={"email": USER, "password": PASSWORD}).status_code == 201
+    assert sign_up(client, USER, PASSWORD).status_code == 200
     assert db.users.find_one({"email": USER}).get("privacy") is None
 
     # login without the header records nothing
@@ -183,22 +182,23 @@ def test_register_refuses_age_confirmed_false(app, db):
 
 
 def test_register_stores_terms_and_age(app, db):
-    resp = app.test_client().post("/api/auth/register", json={
-        "email": USER, "password": PASSWORD, "age_confirmed": True, "terms_version": "2026-11-11"})
-    assert resp.status_code == 201
-    assert set(resp.get_json()) == {"access_token", "email"}
+    resp = sign_up(app.test_client(), USER, PASSWORD, terms_version="2026-11-11")
+    assert resp.status_code == 200
+    assert set(resp.get_json()) == {"access_token", "email", "created"}
     user = db.users.find_one({"email": USER})
     assert user["terms"]["version"] == "2026-11-11"
     assert user["terms"]["accepted_at"]
     assert user["age_confirmed"] is True
 
 
-def test_register_without_clickwrap_fields_still_works(app, db):
-    """Old clients and OAuth signups send neither field."""
-    resp = app.test_client().post("/api/auth/register", json={"email": USER, "password": PASSWORD})
-    assert resp.status_code == 201
-    user = db.users.find_one({"email": USER})
-    assert "terms" not in user and "age_confirmed" not in user
+def test_an_account_is_never_created_without_the_age_confirmation(app, db):
+    """`/register` still accepts a request without the clickwrap fields (it
+    only mails a code), but the call that creates the account needs them."""
+    client = app.test_client()
+    refused = sign_up(client, USER, PASSWORD, age_confirmed=None)
+    assert refused.status_code == 400
+    assert refused.get_json()["code"] == "consent_required"
+    assert db.users.find_one({"email": USER}) is None
 
 
 def test_register_rejects_a_malformed_terms_version(app, db):

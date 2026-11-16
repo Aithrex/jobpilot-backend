@@ -4,8 +4,9 @@ AUTOAPPLY_REPAIR_SPEC §6: the user must NEVER be asked to create a private emai
 address, nor to choose where mail forwards. Both happen automatically from the
 registered signup email. This module pins that end of the contract:
 
-  * ``POST /api/auth/register`` provisions the mailbox (best-effort — a mailbox
-    failure can NEVER fail signup, and never changes the 201 shape);
+  * sign-up (``/register`` then the emailed code at ``/otp/verify``) provisions
+    the mailbox (best-effort — a mailbox failure can NEVER fail signup, and
+    never changes the flat payload);
   * ``oauth_service.upsert_user`` does the same for social sign-in, with the
     provider-supplied name so the local part is readable immediately;
   * a fresh mailbox forwards to the account's OWN registered address, ENABLED and
@@ -24,7 +25,7 @@ from __future__ import annotations
 import pytest
 
 import services.managed_mailbox_service as mailbox
-from _vg_support import load_service_app
+from _vg_support import load_service_app, sign_up
 
 DOMAIN = "pilotmail.co"
 EMAIL = "new.user@example.com"
@@ -33,6 +34,7 @@ PASSWORD = "Str0ng!Pass1"
 _COLLECTIONS = (
     "users", "user_preferences", "managed_mailboxes", "mail_aliases",
     "mail_messages", "mail_forward_verifications", "user_resumes",
+    "auth_email_codes", "rate_limit_buckets",
 )
 
 
@@ -50,6 +52,10 @@ def env(monkeypatch):
     for c in _COLLECTIONS:
         db[c].delete_many({})
     mailbox.ensure_indexes()
+    # Sign-up limits are counted in process memory as well as in Mongo, and
+    # this file signs the same address up in every test.
+    from utils.security import get_rate_limiter
+    get_rate_limiter()._requests.clear()
     # No email ever leaves the process (welcome mail is best-effort in register).
     import services.email_service as es
     monkeypatch.setattr(es, "send_email", lambda *a, **k: True)
@@ -66,12 +72,11 @@ def app(env):
 # ---------------------------------------------------------------------------
 
 def test_register_auto_provisions_the_mailbox(app):
-    resp = app.test_client().post("/api/auth/register",
-                                  json={"email": EMAIL, "password": PASSWORD})
-    assert resp.status_code == 201
-    # The auth contract is untouched: flat, {access_token, email}.
+    resp = sign_up(app.test_client(), EMAIL, PASSWORD)
+    assert resp.status_code == 200
+    # The auth contract is untouched: a flat payload.
     body = resp.get_json()
-    assert set(body) == {"access_token", "email"}
+    assert set(body) == {"access_token", "email", "created"}
     assert body["email"] == EMAIL
 
     mb = mailbox.get_mailbox(EMAIL)
@@ -84,10 +89,8 @@ def test_register_auto_provisions_the_mailbox(app):
 
 
 def test_register_stores_the_name_and_uses_it_for_the_local_part(app):
-    resp = app.test_client().post("/api/auth/register", json={
-        "email": EMAIL, "password": PASSWORD, "name": "Harshith Manne",
-    })
-    assert resp.status_code == 201
+    resp = sign_up(app.test_client(), EMAIL, PASSWORD, name="Harshith Manne")
+    assert resp.status_code == 200
     assert _db().users.find_one({"email": EMAIL})["name"] == "Harshith Manne"
     assert mailbox.get_mailbox(EMAIL)["address"] == f"harshith.manne@{DOMAIN}"
 
@@ -95,7 +98,7 @@ def test_register_stores_the_name_and_uses_it_for_the_local_part(app):
 def test_register_without_a_name_mints_a_repairable_stopgap(app):
     # The current sign-up form collects only email + password, so there is no
     # name to slug -> opaque alias, FLAGGED for self-repair.
-    app.test_client().post("/api/auth/register", json={"email": EMAIL, "password": PASSWORD})
+    sign_up(app.test_client(), EMAIL, PASSWORD)
     mb = mailbox.get_mailbox(EMAIL)
     assert mb["address"].startswith("career.")
     assert mb["name_pending"] is True
@@ -107,27 +110,24 @@ def test_mailbox_failure_never_fails_signup(app, monkeypatch):
         raise RuntimeError("mongo is down")
 
     monkeypatch.setattr(mailbox, "provision", _boom)
-    resp = app.test_client().post("/api/auth/register",
-                                  json={"email": EMAIL, "password": PASSWORD})
-    assert resp.status_code == 201
+    resp = sign_up(app.test_client(), EMAIL, PASSWORD)
+    assert resp.status_code == 200
     assert _db().users.find_one({"email": EMAIL}) is not None
     assert _db().managed_mailboxes.find_one({"user_email": EMAIL}) is None
 
 
 def test_register_is_still_the_only_source_of_identity(app):
     """D7: the mailbox owner is the registered email, never a body-supplied one."""
-    app.test_client().post("/api/auth/register", json={
-        "email": EMAIL, "password": PASSWORD, "user_email": "attacker@evil.com",
-    })
+    sign_up(app.test_client(), EMAIL, PASSWORD, user_email="attacker@evil.com")
     assert _db().managed_mailboxes.find_one({"user_email": "attacker@evil.com"}) is None
     assert _db().managed_mailboxes.find_one({"user_email": EMAIL}) is not None
 
 
 def test_second_register_is_409_and_mints_no_second_mailbox(app):
     client = app.test_client()
-    client.post("/api/auth/register", json={"email": EMAIL, "password": PASSWORD})
+    sign_up(client, EMAIL, PASSWORD)
     resp = client.post("/api/auth/register", json={"email": EMAIL, "password": PASSWORD})
-    assert resp.status_code == 409
+    assert resp.status_code == 409, resp.get_data(as_text=True)
     assert resp.status_code != 401          # auth failures are NEVER 401
     assert _db().managed_mailboxes.count_documents({"user_email": EMAIL}) == 1
 

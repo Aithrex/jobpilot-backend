@@ -11,7 +11,7 @@ import sys
 import pytest
 from bson import ObjectId
 
-from _vg_support import current_db, load_service_app
+from _vg_support import current_db, load_service_app, sign_up
 
 USER = "list.user@example.com"
 OTHER = "other.user@example.com"
@@ -50,7 +50,7 @@ def sent(monkeypatch):
 def db():
     database = current_db()
     from services import account_service
-    for c in {"users", "notification_prefs", "email_suppressions", "rate_limit_buckets",
+    for c in {"users", "notification_prefs", "email_suppressions", "rate_limit_buckets", "auth_email_codes",
               "mail_aliases", "tech_feed_alert_failures", "user_preferences",
               *[c for c, _ in account_service.CASCADE_COLLECTIONS]}:
         database[c].delete_many({})
@@ -367,11 +367,16 @@ def test_deleted_user_is_never_emailed_again_until_they_sign_up_again(app, db, s
     assert len(sent) == n
 
     # signing up again is a new relationship: only the erasure marker goes
-    resp = app.test_client().post("/api/auth/register", json={"email": USER, "password": PASSWORD})
-    assert resp.status_code == 201
+    resp = sign_up(app.test_client(), USER, PASSWORD)
+    assert resp.status_code == 200
     assert es.send_email(USER, "s", "<p>b</p>") is True
+    # A bounced address cannot receive its code, and is told so: the request
+    # that would have mailed it clears only the erasure marker.
+    monkeypatch.setattr(es, "email_configured", lambda: True)
+    monkeypatch.setattr(es, "send_login_code",
+                        lambda to, code, minutes=10: es.send_email(to, "code", "<p>code</p>"))
     resp = app.test_client().post("/api/auth/register", json={"email": OTHER, "password": PASSWORD})
-    assert resp.status_code == 201
+    assert resp.status_code == 503 and resp.get_json()["code"] == "email_send_failed"
     assert es.send_email(OTHER, "s", "<p>b</p>") is False      # still bounced
 
 

@@ -538,6 +538,32 @@ def send_password_reset(to_email: str, reset_link: str) -> bool:
     return send_email(to_email, subject, html_body, text_body)
 
 
+def send_login_code(to_email: str, code: str, minutes: int = 10) -> bool:
+    """The six-digit sign-in code. Transactional: no list id, no footer.
+
+    Returns what `send_email` returns, and the caller must act on False: a
+    code that was never sent is a person waiting on an email that is not
+    coming (see auth.py `_send_code`)."""
+    spaced = f"{code[:3]} {code[3:]}"
+    subject = f"{code} is your {APP_NAME} code"
+    html_body = f"""\
+<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:auto;color:#101422">
+  <h2 style="margin:0 0 12px;font-weight:600">Your {APP_NAME} code</h2>
+  <p style="color:#444A5A;line-height:1.5;margin:0 0 20px">Enter this code on the sign-in page.
+  It works once and expires in {minutes} minutes.</p>
+  <p style="margin:0 0 20px;font-size:32px;font-weight:600;letter-spacing:6px;
+     background:#F4F6FA;border-radius:12px;padding:18px 0;text-align:center">{spaced}</p>
+  <p style="color:#5C6170;font-size:13px;line-height:1.5;margin:0">If you did not ask for this code, you can ignore
+  this email. Nobody can sign in without it, and we will never ask you for it by phone or chat.</p>
+</div>"""
+    text_body = (
+        f"Your {APP_NAME} code: {code}\n\n"
+        f"Enter it on the sign-in page. It works once and expires in {minutes} minutes.\n\n"
+        f"If you did not ask for this code, ignore this email. Nobody can sign in without it."
+    )
+    return send_email(to_email, subject, html_body, text_body)
+
+
 def send_test(to_email: str, *, ignore_suppression: bool = False) -> dict:
     """Admin diagnostic: attempt a real send and REPORT the provider's error.
 

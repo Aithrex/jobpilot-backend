@@ -151,6 +151,38 @@ def load_service_app(svc: str):
     return flask_app
 
 
+def sign_up(client, email, password=None, **fields):
+    """Create an account the way the product does and return the final
+    response: ask for a code (through `/register` when there is a password,
+    `/otp/request` otherwise), read it from the mail that would have been
+    sent, and trade it at `/otp/verify`. No account exists before that last
+    call. Extra `fields` (terms_version, name, role ...) ride on both calls;
+    `age_confirmed` defaults to True. A refused first step is returned as is.
+    """
+    import services.email_service as es
+
+    mailed = {}
+    original = es.send_login_code
+    es.send_login_code = lambda to, code, minutes=10: mailed.update(code=code) or True
+    fields.setdefault("age_confirmed", True)
+    try:
+        if password:
+            first = client.post("/api/auth/register",
+                                json={"email": email, "password": password, **fields})
+            expected = 202
+        else:
+            first = client.post("/api/auth/otp/request", json={"email": email})
+            expected = 200
+    finally:
+        es.send_login_code = original
+    if first.status_code != expected:
+        return first
+    body = {"email": email, "code": mailed["code"], **fields}
+    if password:
+        body["password"] = password
+    return client.post("/api/auth/otp/verify", json=body)
+
+
 # --- 4. FakeLLM -------------------------------------------------------------
 class FakeLLM:
     """Deterministic stand-in for ``services.claude_client.claude_json``.

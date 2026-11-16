@@ -153,7 +153,7 @@ class InputSanitizer:
     @staticmethod
     def sanitize_email(email: str) -> Optional[str]:
         """Validate and sanitize email address"""
-        if not email:
+        if not email or not isinstance(email, str):
             return None
         
         email = InputSanitizer.sanitize_string(email.lower(), 320)

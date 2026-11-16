@@ -32,7 +32,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import requests as _requests_mod
 
-from _vg_support import load_service_app
+from _vg_support import load_service_app, sign_up
 
 from services import guest_service
 from services import platform_config_service as pconfig
@@ -388,9 +388,8 @@ def auth_app(db):
 
 def _register_and_login(auth_app, email):
     client = auth_app.test_client()
-    reg = client.post("/api/auth/register",
-                      json={"email": email, "password": PASSWORD})
-    assert reg.status_code == 201, reg.get_data(as_text=True)
+    reg = sign_up(client, email, PASSWORD)
+    assert reg.status_code == 200, reg.get_data(as_text=True)
     login = client.post("/api/auth/login",
                         json={"email": email, "password": PASSWORD})
     assert login.status_code == 200, login.get_data(as_text=True)
