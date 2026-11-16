@@ -89,7 +89,10 @@ GMAIL_REQUEST_INTERVAL_SECONDS = 1.0
 # than what an application already holds never moves it.
 #   2 (2026-11-16): application mail only, HTML bodies read properly, replies
 #                   and the user's own sent mail left out.
-SCAN_VERSION = 2
+#   3 (2026-11-16): interview wording must be a stated, unconditional event about
+#                   the person; automatic Interviewing moves the new rules no
+#                   longer support are put back (`_retract_stale_interviews`).
+SCAN_VERSION = 3
 # Text kept per message for the rules. A decision sentence sits near the top;
 # this is room for a long greeting and a quoted job description.
 BODY_TEXT_LIMIT = 6000
@@ -1739,76 +1742,92 @@ _OFFER_PATTERNS = [
 # DELIBERATELY conservative here: any pattern that could match conditional
 # "if you're selected for an interview" boilerplate is excluded, and a match
 # that follows "if" or "should" in its own sentence is never counted.
-_INTERVIEW_PATTERNS = [
+# Each pattern has a kind:
+#   link      a scheduling, calendar or assessment link the person is asked to use
+#   strong    a stated event or a direct ask: "are you available on", "your
+#             interview is scheduled", "we'd like to invite you to interview"
+#   progress  being moved on; counts only when the sentence is about YOU, so
+#             "candidates selected for the next step will be contacted" is not
+#   soft      friendly outreach ("let's connect", "I'd love to chat"). Worth a
+#             question, never a move: it is how recruiters, newsletters and
+#             cold outreach all talk.
+# Every non-link match is also dropped when its sentence states a selection
+# condition ("if your background is a match", "only candidates selected") or
+# describes the process in general ("our process includes a phone screen with").
+_INTERVIEW_PATTERN_KINDS = [
     # ── scheduling links (almost certainly interview-intent) ─────────────
-    r"\bcalendly\.com/",
-    r"\bsavvycal\.com/",
-    r"\b(?:meetings|book)\.hubspot\.com/",
-    r"\bcal\.com/",
-    r"\b(?:lu\.ma|chronograph\.io|x\.ai)/",
-    r"\bgoodtime\.io/",
+    (r"\bcalendly\.com/", "link"),
+    (r"\bsavvycal\.com/", "link"),
+    (r"\b(?:meetings|book)\.hubspot\.com/", "link"),
+    (r"\bcal\.com/", "link"),
+    (r"\b(?:lu\.ma|chronograph\.io|x\.ai)/", "link"),
+    (r"\bgoodtime\.io/", "link"),
 
     # ── a calendar invitation for an interview ───────────────────────────
-    r"\b(?:updated )?invitation(?: from [^:\n]{1,60})?: [^\n]{0,120}\b(?:interview|phone screen|technical screen|recruiter screen|onsite|hiring manager)\b",
+    (r"\b(?:updated )?invitation(?: from [^:\n]{1,60})?: [^\n]{0,120}\b(?:interview|phone screen|technical screen|recruiter screen|onsite|hiring manager)\b", "link"),
 
     # ── direct availability / scheduling asks ────────────────────────────
     # Note: "are you available" must be followed by "on/for/to/this/next" so
     # we don't catch "are you available for any of the listed roles" boilerplate.
-    r"\b(?:are|would|when (?:are|would)) you (?:available|free) (?:on |for |to |this |next |the |a (?:few|couple|brief))",
-    r"\bdo you have (?:any |some |a few )?(?:availability|time|times|slots) (?:on |this |next |for |to )",
-    r"\bplease (?:share|let me know|send) (?:your )?(?:availability|times|time slots)\b",
-    r"\b(?:share|provide|send) (?:me )?(?:a few |some )?(?:times?|slots?) (?:that work|when you|you['’]re)",
-    r"\blet['’]s (?:schedule|set up|find a time|coordinate|connect|chat|talk)\b",
-    r"\bschedule (?:a|the|your|our) (?:call|interview|screen|chat|conversation|time|meeting|sync)\b",
-    r"\b(?:I['’]?d|I would) (?:love|like) to (?:schedule|set up|chat|connect|hop on|jump on)\b",
-    r"\b(?:like|love) to (?:hop|jump|get) on a (?:quick )?(?:call|chat|video)\b",
+    (r"\b(?:are|would|when (?:are|would)) you (?:available|free) (?:on |for |to |this |next |the |a (?:few|couple|brief))", "strong"),
+    (r"\bdo you have (?:any |some |a few )?(?:availability|time|times|slots) (?:on |this |next |for |to )", "strong"),
+    (r"\bplease (?:share|let me know|send) (?:your )?(?:availability|times|time slots)\b", "strong"),
+    (r"\b(?:share|provide|send) (?:me )?(?:a few |some )?(?:times?|slots?) (?:that work|when you|you['’]re)", "strong"),
+    (r"\blet['’]s (?:schedule|set up|find a time|coordinate)\b", "strong"),
+    (r"\bschedule (?:a|the|your|our) (?:call|interview|screen|chat|conversation|time|meeting|sync)\b", "strong"),
+    (r"\b(?:I['’]?d|I would|we['’]?d|we would) (?:love|like) to (?:schedule|set up)\b", "strong"),
 
     # ── confirmed / scheduled interview events ──────────────────────────
     # Crucially these require a confirmation verb, NOT just the word "interview"
-    r"\b(?:phone|technical|behavioral|hiring manager|recruiter|initial|introductory|first[- ]round|second[- ]round|final[- ]round|culture) (?:screen|interview|call|chat|conversation)\s+(?:with|on|at|scheduled|confirmed|is set|has been booked)\b",
-    r"\b(?:your |the )?(?:phone screen|technical screen|video interview|virtual interview|interview) (?:is |has been |will be )?(?:scheduled|confirmed|booked|set|happening|on)\b",
-    r"\binterview (?:scheduled|confirmed|booked|set up) (?:for|on|with|at)\b",
-    r"\b(?:confirming|to confirm) (?:your |our |the )?(?:interview|screen|call|chat|meeting)\b",
-    r"\bcalendar invite (?:for|to) (?:your |the |our )?(?:interview|screen|call|chat|meeting)\b",
+    (r"\b(?:phone|technical|behavioral|hiring manager|recruiter|initial|introductory|first[- ]round|second[- ]round|final[- ]round|culture) (?:screen|interview|call|chat|conversation)\s+(?:with|on|at|scheduled|confirmed|is set|has been booked)\b", "strong"),
+    (r"\b(?:your |the )?(?:phone screen|technical screen|video interview|virtual interview|interview) (?:is |has been |will be )?(?:scheduled|confirmed|booked|set|happening|on)\b", "strong"),
+    (r"\binterview (?:scheduled|confirmed|booked|set up) (?:for|on|with|at)\b", "strong"),
+    (r"\b(?:confirming|to confirm) (?:your |our |the )?(?:interview|screen|call|chat|meeting)\b", "strong"),
+    (r"\bcalendar invite (?:for|to) (?:your |the |our )?(?:interview|screen|call|chat|meeting)\b", "strong"),
 
     # ── invitations to interviews / next rounds ──────────────────────────
     # Must have a clear "we want to invite you" — not "if invited"
-    r"\b(?:we['’]?d like|we would like|i['’]?d like|i would like) to (?:invite|set up|schedule)\s+(?:you )?(?:for |to )?(?:an? |the )?(?:interview|screen|call|chat|conversation|next (?:round|step|stage))\b",
-    r"\b(?:we['’]?re|i['’]?m|we are) (?:inviting|extending an invitation to) you (?:to|for)\b",
-    r"\b(?:onsite|virtual onsite|panel|loop) (?:loop|interview|round)\s+(?:with|on|scheduled|confirmed|invitation)\b",
+    (r"\b(?:we['’]?d like|we would like|i['’]?d like|i would like) to (?:invite|set up|schedule)\s+(?:you )?(?:for |to )?(?:an? |the )?(?:interview|screen|call|chat|conversation|next (?:round|step|stage))\b", "strong"),
+    (r"\b(?:we['’]?re|i['’]?m|we are) (?:inviting|extending an invitation to) you (?:to|for)\b", "strong"),
+    (r"\b(?:onsite|virtual onsite|panel|loop) (?:loop|interview|round)\s+(?:with|on|scheduled|confirmed|invitation)\b", "strong"),
     # A receipt's "the next step in our process is a review" is not progress;
     # being moved to the next step is.
-    r"\b(?:advanc\w+|mov\w+|progress\w+|proceed\w+|invit\w+|selected)\b[^.!?\n]{0,40}\bnext (?:round|step|stage) (?:of|in) (?:the|your|our) (?:interview|hiring|recruiting|recruitment|selection )?\s?process\b",
-    r"\bmove(?:d)? (?:you )?(?:forward|on|ahead) to (?:the next|our|a) (?:round|step|stage|interview)\b",
+    (r"\b(?:advanc\w+|mov\w+|progress\w+|proceed\w+|invit\w+|selected)\b[^.!?\n]{0,40}\bnext (?:round|step|stage) (?:of|in) (?:the|your|our) (?:interview|hiring|recruiting|recruitment|selection )?\s?process\b", "progress"),
+    (r"\bmove(?:d)? (?:you )?(?:forward|on|ahead) to (?:the next|our|a) (?:round|step|stage|interview)\b", "progress"),
 
     # ── take-home / coding assessments ───────────────────────────────────
     # Only when actively assigned (link to it, deadline, etc.) — not
     # mentioning that one exists in the process
-    r"\btake[- ]home (?:assessment|assignment|exercise|challenge|project|coding (?:test|assignment))\s+(?:link|attached|to complete|due|deadline|below|here|at)\b",
-    r"\b(?:please )?(?:complete|submit|return) (?:the |your |this |attached )?(?:take[- ]home|coding|technical) (?:assessment|assignment|exercise|challenge|task)\b",
-    r"\b(?:hackerrank|codility|coderpad|coderbyte|codesignal|leetcode|hackerearth)\.(?:com|io)/",
-    r"\b(?:assessment|coding test) (?:link|invitation) (?:below|above|attached|here)\b",
+    (r"\btake[- ]home (?:assessment|assignment|exercise|challenge|project|coding (?:test|assignment))\s+(?:link|attached|to complete|due|deadline|below|here|at)\b", "strong"),
+    (r"\b(?:please )?(?:complete|submit|return) (?:the |your |this |attached )?(?:take[- ]home|coding|technical) (?:assessment|assignment|exercise|challenge|task)\b", "strong"),
+    (r"\b(?:hackerrank|codility|coderpad|coderbyte|codesignal|leetcode|hackerearth)\.(?:com|io)/", "link"),
+    (r"\b(?:assessment|coding test) (?:link|invitation) (?:below|above|attached|here)\b", "strong"),
 
     # ── hiring manager / recruiter intros ────────────────────────────────
-    r"\bhiring manager (?:would like|wants|will|is excited|reached out)\b.{0,40}\b(?:to (?:speak|chat|meet|connect|interview|talk)|with you|to set up)\b",
-    r"\b(?:i['’]?m|hi[,]?) (?:reaching out|writing) (?:about|regarding|to discuss|to chat about) your (?:application|interest|background)\b.{0,80}\b(?:next step|chat|call|interview|screen|connect)\b",
-    r"\bafter review(?:ing)? your (?:application|resume|profile)[,]? (?:we['’]?d like|i['’]?d like|we would like)\b",
+    (r"\bhiring manager (?:would like|wants|will|is excited|reached out)\b.{0,40}\b(?:to (?:speak|chat|meet|connect|interview|talk)|with you|to set up)\b", "soft"),
+    (r"\b(?:i['’]?m|hi[,]?) (?:reaching out|writing) (?:about|regarding|to discuss|to chat about) your (?:application|interest|background)\b.{0,80}\b(?:next step|chat|call|interview|screen|connect)\b", "soft"),
+    (r"\bafter review(?:ing)? your (?:application|resume|profile)[,]? (?:we['’]?d like|i['’]?d like|we would like)\b", "progress"),
+    (r"\blet['’]s (?:connect|chat|talk)\b", "soft"),
+    (r"\b(?:I['’]?d|I would) (?:love|like) to (?:chat|connect|hop on|jump on)\b", "soft"),
+    (r"\b(?:like|love) to (?:hop|jump|get) on a (?:quick )?(?:call|chat|video)\b", "soft"),
 
     # ── direct interview-platform links ──────────────────────────────────
-    r"\b(?:hirevue|sparkhire|willo|videoask|odro|interviewing\.io)\.(?:com|io)/",
-    r"\b(?:karat|byteboard|coderbyte interview|techscreen)\.(?:com|io)/",
+    (r"\b(?:hirevue|sparkhire|willo|videoask|odro|interviewing\.io)\.(?:com|io)/", "link"),
+    (r"\b(?:karat|byteboard|coderbyte interview|techscreen)\.(?:com|io)/", "link"),
 ]
+_INTERVIEW_PATTERNS = [p for p, kind in _INTERVIEW_PATTERN_KINDS if kind != "soft"]
 # A video-call link is an interview only beside interview words. Alone it is
 # just as likely a webinar from a company the user happens to track.
 _MEETING_LINK = re.compile(
-    r"\b(?:zoom|google meet|teams|meet\.google\.com|us\d+web\.zoom\.us|teams\.microsoft\.com)/[A-Za-z0-9/_?=&\-]+",
+    r"\b(?:(?:[a-z0-9-]+\.)?zoom\.us/(?:j|my|w|s)/|meet\.google\.com/|teams\.microsoft\.com/l/meetup-join|"
+    r"teams\.live\.com/meet/|(?:[a-z0-9-]+\.)?webex\.com/(?:meet|join|[a-z0-9-]+/j\.php))[A-Za-z0-9/_?=&\-.]*",
     re.IGNORECASE)
 _INTERVIEW_CONTEXT = re.compile(
     r"\b(?:interview|phone screen|technical screen|recruiter screen|hiring manager|onsite|your candidacy)\b",
     re.IGNORECASE)
 # A link the candidate is asked to use counts even inside an acknowledgement.
 _ACTION_LINK = re.compile(
-    r"(?:calendly|savvycal|hubspot|cal|goodtime|hackerrank|codility|coderpad|coderbyte|codesignal|"
+    r"\b(?:calendly|savvycal|hubspot|cal|goodtime|hackerrank|codility|coderpad|coderbyte|codesignal|"
     r"hackerearth|hirevue|sparkhire|willo|videoask|karat|byteboard|zoom|meet\.google|teams\.microsoft)"
     r"\.?[a-z.]*/", re.IGNORECASE)
 
@@ -1818,6 +1837,7 @@ _CLOSING_LINE_REGEX = [re.compile(p, re.IGNORECASE) for p in _CLOSING_LINE_PATTE
 _WITHDRAWN_REGEX = [re.compile(p, re.IGNORECASE) for p in _WITHDRAWN_PATTERNS]
 _OFFER_REGEX = [re.compile(p, re.IGNORECASE) for p in _OFFER_PATTERNS]
 _INTERVIEW_REGEX = [re.compile(p, re.IGNORECASE) for p in _INTERVIEW_PATTERNS]
+_INTERVIEW_KIND_REGEX = [(re.compile(p, re.IGNORECASE), kind) for p, kind in _INTERVIEW_PATTERN_KINDS]
 
 
 # Boilerplate can prevent a false interview, but cannot prove a submission.
@@ -1844,6 +1864,81 @@ _CONDITIONAL_LEAD = re.compile(
 def _sentence_lead(text: str, start: int) -> str:
     """The part of the sentence that comes before position `start`."""
     return text[max(text.rfind(mark, 0, start) for mark in ".!?;\n") + 1:start]
+
+
+# A sentence that makes the event depend on being chosen is boilerplate,
+# wherever the condition sits: "a recruiter will reach out to schedule a call
+# if your background is a match", "only candidates selected ... will be contacted".
+_SELECTION_CONDITION = re.compile(
+    r"\b(?:if|should|once|unless|in the event|provided)\b[^.!?\n]{0,80}?\b(?:selected|shortlisted|chosen|"
+    r"qualif\w*|(?:a |good |strong |great )?(?:match|fit)\b|move (?:you )?forward|moving forward|"
+    r"proceed\w*|advance\w*|align\w*|meet (?:our|the|all) (?:requirements|criteria|needs|qualifications))"
+    r"|\bwhen (?:you are |you['’]re )?(?:selected|shortlisted|chosen)\b"
+    r"|\b(?:only |those |the )?(?:candidates|applicants|individuals|people)\b[^.!?\n]{0,40}?"
+    r"\b(?:selected|shortlisted|chosen|qualified|who (?:best )?(?:meet|match))\b",
+    re.IGNORECASE)
+# A sentence describing how hiring works in general, not what is happening.
+_GENERAL_PROCESS = re.compile(
+    r"\b(?:typically|usually|generally|normally|what to expect|tips for|how to prepare|frequently asked|"
+    r"learn (?:more )?about|explore our|"
+    r"our (?:interview|hiring|recruiting|recruitment|selection) process|"
+    r"(?:the|this) (?:interview|hiring|recruiting|selection) process (?:consists|includes|involves|typically|may|will|is)|"
+    r"(?:process|steps?|stages?) (?:includes?|involves?|consists? of|may include|might include|can include|will include))\b",
+    re.IGNORECASE)
+_SECOND_PERSON = re.compile(r"\b(?:you|your|you['’](?:ve|re|ll))\b", re.IGNORECASE)
+# "Let's connect: follow us on LinkedIn" is a social plug, not outreach.
+_SOCIAL_PLUG = re.compile(
+    r"\b(?:follow us|on (?:linkedin|twitter|instagram|facebook|youtube)|subscribe|newsletter|"
+    r"talent (?:community|network)|join our community)\b", re.IGNORECASE)
+_INTERVIEW_RANK = {"soft": 1, "strong": 2}
+
+
+def _sentence_around(text: str, start: int, end: int) -> str:
+    """The whole sentence a match sits in."""
+    lo = max(text.rfind(mark, 0, start) for mark in ".!?;\n") + 1
+    tails = [i for i in (text.find(mark, end) for mark in "!?;\n") if i != -1]
+    # A full stop ends the sentence only when a space or the end follows it,
+    # so "calendly.com/x" or "Inc." mid-sentence does not cut it short.
+    stop = re.search(r"\.(?:\s|$)", text[end:])
+    if stop:
+        tails.append(end + stop.start())
+    return text[lo:min(tails) if tails else len(text)]
+
+
+def _interview_signal(text: str) -> Optional[Tuple[str, str]]:
+    """(phrase, "strong" | "soft") for the clearest interview signal in one
+    email, or None. A link counts by itself; wording counts only when its
+    sentence states it as fact, about this person, unconditionally."""
+    if not text:
+        return None
+    soft: Optional[str] = None
+    for rx, kind in _INTERVIEW_KIND_REGEX:
+        for m in rx.finditer(text):
+            if _CONDITIONAL_LEAD.search(_sentence_lead(text, m.start())):
+                continue
+            phrase = m.group(0)[:160]
+            if kind == "link":
+                return phrase, "strong"
+            sentence = _sentence_around(text, m.start(), m.end())
+            if _SELECTION_CONDITION.search(sentence) or _GENERAL_PROCESS.search(sentence):
+                continue
+            if kind == "progress" and not _SECOND_PERSON.search(sentence):
+                continue
+            if kind == "soft":
+                if not _SOCIAL_PLUG.search(sentence):
+                    soft = soft or phrase
+                continue
+            return phrase, "strong"
+    # A real meeting link beside interview wording that is itself a statement.
+    link = _MEETING_LINK.search(text)
+    if link:
+        for m in _INTERVIEW_CONTEXT.finditer(text):
+            sentence = _sentence_around(text, m.start(), m.end())
+            if (_CONDITIONAL_LEAD.search(_sentence_lead(text, m.start()))
+                    or _SELECTION_CONDITION.search(sentence) or _GENERAL_PROCESS.search(sentence)):
+                continue
+            return link.group(0)[:160], "strong"
+    return (soft, "soft") if soft else None
 
 
 def _scan_patterns(text: str, regexes: List[re.Pattern], stated: bool = False) -> Optional[str]:
@@ -1925,13 +2020,14 @@ def extract_deterministic_signals(messages: List[Dict[str, Any]]) -> Dict[str, A
             phrase = _scan_patterns(text, _OFFER_REGEX, stated=True)
             if phrase:
                 keep("offer", phrase, msg, order)
-        if "interviewing" not in found:
-            phrase = _scan_patterns(text, _INTERVIEW_REGEX, stated=True)
-            if not phrase and _INTERVIEW_CONTEXT.search(text):
-                link = _MEETING_LINK.search(text)
-                phrase = link.group(0)[:160] if link else None
-            if phrase:
-                keep("interviewing", phrase, msg, order, link=bool(_ACTION_LINK.search(phrase)))
+        # The newest interview signal wins, unless an older email says it
+        # more plainly (a soft "let's chat" never hides a real invitation).
+        interview = _interview_signal(text)
+        if interview and _INTERVIEW_RANK[interview[1]] > _INTERVIEW_RANK.get(
+                (found.get("interviewing") or {}).get("strength"), 0):
+            keep("interviewing", interview[0], msg, order,
+                 link=bool(_ACTION_LINK.search(interview[0]) or _MEETING_LINK.search(interview[0])),
+                 strength=interview[1])
         if "receipt" not in found:
             phrase = _scan_patterns(text, _APPLICATION_ACK_REGEX)
             if phrase:
@@ -2041,6 +2137,16 @@ def reconcile_classification(
     if "interviewing" in deterministic:
         interview = deterministic["interviewing"]
         receipt = deterministic.get("receipt")
+        if interview.get("strength") == "soft":
+            # Friendly outreach reads the same from a recruiter, a newsletter
+            # and a cold message: ask, never move the card by itself.
+            return {
+                "status": "interviewing",
+                "confidence": 0.85 if llm_status == "interviewing" else 0.80,
+                "reason": f'Possible interview, please check: "{interview["phrase"]}"',
+                "source": "deterministic+llm" if llm_status == "interviewing" else "deterministic",
+                "evidence_message_id": interview.get("message_id"),
+            }
         if receipt and receipt.get("order") == interview.get("order") and not interview.get("link"):
             # "Thanks for applying ... our team will schedule a call" is how
             # receipts are written. It may be an invitation; the user decides.
@@ -2541,6 +2647,7 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
         # later fails, so a clear "we have decided to move forward with other
         # candidates" still resolves to rejected.
         deterministic = extract_deterministic_signals([it["msg"] for it in items])
+        _retract_stale_interviews(user_email, rec_meta, msg_ids, deterministic)
         if rec_meta.get("requires_application_match") and not any(
                 kind in deterministic for kind in ("receipt", "rejected", "offer", "withdrawn")):
             # An email about a role that is not tracked is worth showing only
@@ -3140,6 +3247,47 @@ def list_activity(user_email: str, limit: int = 20) -> List[Dict[str, Any]]:
             "undoable": not undone and current.get(d.get("record_id")) == d.get("suggested_status"),
         })
     return changes
+
+
+def _retract_stale_interviews(user_email: str, rec_meta: Dict[str, Any], msg_ids: List[str],
+                              deterministic: Dict[str, Any]) -> int:
+    """Put back an automatic Interviewing move its own email no longer supports.
+
+    Before scan version 3, receipt boilerplate ("a recruiter will reach out to
+    schedule a call if your background is a match") moved cards by itself. On
+    the re-read, when the same email now carries no stated interview, the move
+    is undone exactly as the user's Undo would, unless the person has changed
+    the application since. Returns how many were put back.
+    """
+    if (deterministic.get("interviewing") or {}).get("strength") == "strong" or not msg_ids:
+        return 0
+    record_id = rec_meta.get("record_id")
+    if not record_id or rec_meta.get("current_status") != "interviewing":
+        return 0
+    moved = list(_suggestions().find({
+        "user_email": user_email, "record_id": record_id, "auto_applied": True, "applied": True,
+        "undone": {"$ne": True}, "suggested_status": "interviewing",
+        "$or": [{"gmail_message_id": {"$in": msg_ids}}, {"evidence_message_id": {"$in": msg_ids}}]}))
+    retracted = 0
+    for s in moved:
+        applied_at = _as_utc(s.get("applied_at"))
+        changed_at = _as_utc(rec_meta.get("status_updated_at"))
+        if applied_at and changed_at and (changed_at - applied_at).total_seconds() > 5:
+            continue  # the person has touched this application since
+        try:
+            undo_auto_apply(user_email, s["suggestion_id"])
+        except Exception as e:  # GmailUndoError, LookupError: leave it as it is
+            logger.info("[gmail-sync] retraction skipped record=%s: %s", record_id, type(e).__name__)
+            continue
+        _suggestions().update_one(
+            {"suggestion_id": s["suggestion_id"], "user_email": user_email},
+            {"$set": {"dismissed_reason": "not an interview on a closer read",
+                      "retracted_by_rules": True}})
+        rec_meta["current_status"] = s.get("current_status") or "applied"
+        retracted += 1
+        logger.info("[gmail-sync] retracted interviewing record=%s back to %s",
+                    record_id, rec_meta["current_status"])
+    return retracted
 
 
 def undo_auto_apply(user_email: str, suggestion_id: str) -> Dict[str, Any]:
