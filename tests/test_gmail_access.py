@@ -1,9 +1,11 @@
 """Who may connect Gmail while Google limits the app to listed test accounts.
 
 In Testing, a Google account that is not on the project's test-user list is
-stopped on Google's own page. The app therefore asks first: a person requests
-access, the owner adds the address at Google and records it here, and only then
-is Connect offered. Offline: mongomock, no Google, no email sent."""
+stopped on Google's own page. By default (`try`) everyone may press Connect and
+whoever comes back without a connection is offered "Ask for access". The older
+`invite` gate asks first: a person requests access, the owner adds the address
+at Google and records it here, and only then is Connect offered. Offline:
+mongomock, no Google, no email sent."""
 import pytest
 
 from _vg_support import current_db, load_service_app
@@ -58,26 +60,79 @@ def status(app, email=USER):
 
 # --- the gate ---------------------------------------------------------------
 
+@pytest.fixture
+def invite(monkeypatch):
+    monkeypatch.setenv("GMAIL_ACCESS_GATE", "invite")
+
+
 def test_the_gate_follows_the_consent_screen_and_can_be_overridden(db, monkeypatch):
-    assert access.gate() == "invite"
+    assert access.gate() == "try"
     monkeypatch.setenv("GOOGLE_OAUTH_CONSENT_MODE", "production")
     assert access.gate() == "open"
     monkeypatch.setenv("GMAIL_ACCESS_GATE", "invite")
     assert access.gate() == "invite"
+    monkeypatch.setenv("GMAIL_ACCESS_GATE", "nonsense")
+    assert access.gate() == "open"
 
 
-def test_nobody_is_sent_to_google_before_their_address_is_added(resume):
+# --- try: connect first, ask if Google stops you ---------------------------
+
+def test_everyone_may_press_connect_and_the_attempt_is_remembered(resume, db):
+    before = status(resume)["access"]
+    assert before["gate"] == "try" and before["state"] == "none" and before["attempted_at"] is None
+    response = resume.test_client().get("/api/resume/gmail/auth-url", headers=auth(resume))
+    assert response.status_code == 200
+    assert "login_hint" not in response.get_json()["auth_url"]
+    after = status(resume)["access"]
+    assert after["state"] == "none", "pressing Connect is not asking for access"
+    assert after["attempted_at"], "a person who comes back without a connection is offered Ask for access"
+    assert db.sent == [], "nobody is emailed for a press"
+
+
+def test_asking_after_a_blocked_try_emails_the_owner_by_default(resume, db):
+    client = resume.test_client()
+    client.get("/api/resume/gmail/auth-url", headers=auth(resume))
+    body = client.post("/api/resume/gmail/access-request", headers=auth(resume),
+                       json={"google_email": "blocked@gmail.test"}).get_json()
+    assert body["access"]["state"] == "requested" and body["access"]["gate"] == "try"
+    assert db.sent == [("harshith@aithrex.tech", "Gmail access request: blocked@gmail.test")]
+    assert db.gmail_access.count_documents({}) == 1, "the attempt row becomes the request"
+    # Asking does not lock Connect: they may try again once added at Google.
+    assert client.get("/api/resume/gmail/auth-url", headers=auth(resume)).status_code == 200
+
+
+def test_owner_notices_can_be_switched_off(resume, db, monkeypatch):
+    monkeypatch.setenv("GMAIL_ACCESS_NOTIFY_EMAIL", "off")
+    access.request_access(USER, "quiet@gmail.test")
+    assert db.sent == []
+
+
+def test_an_old_attempt_stops_asking(db):
+    from datetime import datetime, timedelta, timezone
+    db.gmail_access.insert_one({"user_email": USER, "state": "none", "google_email": None,
+                                "last_attempt_at": datetime.now(timezone.utc) - timedelta(days=5)})
+    assert access.access_for(USER)["attempted_at"] is None
+
+
+def test_a_connected_person_is_never_offered_ask_for_access(db):
+    access.record_attempt(USER)
+    assert access.access_for(USER, has_connection=True)["attempted_at"] is None
+
+
+# --- invite: ask first ------------------------------------------------------
+
+def test_nobody_is_sent_to_google_before_their_address_is_added(resume, invite):
     client = resume.test_client()
     assert status(resume)["access"] == {
         "mode": "testing", "expires_at": None, "gate": "invite", "state": "none",
-        "google_email": None, "requested_at": None, "decided_at": None}
+        "google_email": None, "requested_at": None, "decided_at": None, "attempted_at": None}
     refused = client.get("/api/resume/gmail/auth-url", headers=auth(resume))
     assert refused.status_code == 403, "an access answer is never a 401: that logs the person out"
     assert refused.get_json()["code"] == "gmail_access_required"
     assert current_db().gmail_oauth_states.count_documents({}) == 0
 
 
-def test_asking_is_recorded_once_and_tells_the_owner(resume, db, monkeypatch):
+def test_asking_is_recorded_once_and_tells_the_owner(resume, db, monkeypatch, invite):
     monkeypatch.setenv("GMAIL_ACCESS_NOTIFY_EMAIL", "owner@example.test")
     client = resume.test_client()
     first = client.post("/api/resume/gmail/access-request", headers=auth(resume),
@@ -146,7 +201,7 @@ def test_someone_already_connected_can_always_reconnect(resume, db):
     assert resume.test_client().get("/api/resume/gmail/auth-url", headers=auth(resume)).status_code == 200
 
 
-def test_changing_the_address_goes_back_to_waiting(db):
+def test_changing_the_address_goes_back_to_waiting(db, invite):
     access.request_access(USER, "first@gmail.test")
     access.approve(ADMIN, user_email=USER)
     assert access.request_access(USER, "second@gmail.test")["state"] == "requested"
@@ -163,7 +218,7 @@ def test_once_google_lists_the_app_publicly_everyone_is_let_in(resume, monkeypat
 
 # --- the owner's list -------------------------------------------------------
 
-def test_the_owner_sees_who_is_waiting_and_how_many_places_are_used(db):
+def test_the_owner_sees_who_is_waiting_and_how_many_places_are_used(db, invite):
     auth_app = load_service_app("auth")
     client = auth_app.test_client()
     access.request_access(USER, "priya.sharma@gmail.test")
