@@ -6,8 +6,14 @@ mongomock BEFORE any service import, and defines the ``mock_db`` and
 ``fake_llm`` fixtures. evals/conftest.py imports the same module, so the
 setup runs once per process.
 """
+import os
 import sys
 from pathlib import Path
+
+# The ingest worker's process-wide Workday brake spaces real requests a second
+# apart; tests drive it with fake clocks where they need it, never with sleeps.
+os.environ.setdefault("JOB_INGEST_WORKDAY_INTERVAL", "0")
+os.environ.setdefault("JOB_INGEST_WORKDAY_MIN_INTERVAL", "0")
 
 _HERE = Path(__file__).resolve().parent
 for _p in (str(_HERE.parent / "shared" / "python"), str(_HERE)):
@@ -33,7 +39,8 @@ def _reset_process_caches():
     """
     for module, fn in (("services.tech_feed_service", "reset_coverage_cache"),
                        ("services.canonical_employer", "reset_cache"),
-                       ("services.mnc_jobs_service", "reset_inventory_held_cache")):
+                       ("services.mnc_jobs_service", "reset_inventory_held_cache"),
+                       ("services.job_ingest_worker", "reset_workday_gate")):
         try:
             import importlib
             getattr(importlib.import_module(module), fn)()
