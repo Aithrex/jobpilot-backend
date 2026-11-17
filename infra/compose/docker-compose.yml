@@ -74,7 +74,14 @@ services:
     image: nginxinc/nginx-unprivileged:1.29-alpine
     tmpfs: ["/tmp:size=64m"]
     volumes:
-      - ./nginx/site.conf:/etc/nginx/conf.d/default.conf:ro
+      # The FOLDER, not the file. A single-file bind mount pins the file's
+      # inode at container start; `git pull` replaces site.conf with a new
+      # inode, so the container kept serving the old config and deploy's
+      # `nginx -s reload` re-read the stale copy (2026-11-17: the
+      # /.well-known and /bot locations of #64 stayed dark until the web
+      # container was restarted by hand). A folder mount always shows the
+      # current file. conf.d holds nothing else: nginx includes conf.d/*.conf.
+      - ./nginx:/etc/nginx/conf.d:ro
       - /etc/jobpilot/nginx:/etc/jobpilot/nginx:ro
       - /srv/jobpilot/web:/usr/share/nginx/html:ro
     networks: [internal, edge]
