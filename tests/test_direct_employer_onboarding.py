@@ -480,7 +480,8 @@ def _phenom_page(ids, total):
 def test_phenom_page_cap_is_reported_as_truncation():
     ph = registry.get("phenom")
     size, cap = ph.policy.page_size, ph.policy.max_pages
-    pages = [_phenom_page([f"J{p}-{i}" for i in range(size)], 5000)
+    board = size * cap + 1000          # bigger than the cap, whatever the policy
+    pages = [_phenom_page([f"J{p}-{i}" for i in range(size)], board)
              for p in range(cap)]
     ctx = _PostCtx(pages)
     rows = list(ph.list_jobs(Endpoint(vendor="phenom", tenant="baesystems",
