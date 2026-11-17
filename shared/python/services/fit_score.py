@@ -60,7 +60,7 @@ from services import jd_field_model, jd_profile
 
 logger = logging.getLogger(__name__)
 
-FIT_SCORE_VERSION = "fit-v2.10"
+FIT_SCORE_VERSION = "fit-v2.11"
 
 # The cliff described below is REAL, and this is how 2.1 crosses it.
 #
@@ -139,7 +139,7 @@ FIT_SCORE_VERSION = "fit-v2.10"
 # been a backspace. Stored JD profiles are re-read by EXTRACTOR_VERSION 14.
 _COMPATIBLE_REQUIREMENT_VERSIONS: frozenset = frozenset(
     {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3", "fit-v2.4", "fit-v2.5", "fit-v2.6",
-     "fit-v2.7", "fit-v2.8", "fit-v2.9", "fit-v2.10"})
+     "fit-v2.7", "fit-v2.8", "fit-v2.9", "fit-v2.10", "fit-v2.11"})
 
 # Component maxima. The sum is exactly 100; `test_fit_score_v2` asserts it.
 COMPONENT_MAX: Dict[str, int] = {
@@ -161,6 +161,17 @@ CONSTRAINT_CAPS: Dict[str, int] = {
     "clearance_missing": 40,
     "work_authorization_conflict": 45,
     "severe_experience_gap": 50,
+    # A STATED minimum the resume falls short of, below the severe gap above
+    # (fit-v2.11). Before these, being 2-4 years short cost at most 13 of the
+    # experience component's 20 points, so a 1.5-year resume on a "5+ years"
+    # posting could still read 87 "strong match" when every other component
+    # was strong. 2026-11-17 production boards: 1,153 of 39,229 cards scored a
+    # strong or good match against a minimum 2+ years above the resume.
+    # Two or more years short: at most a "possible match". More than one: never
+    # "strong". Only a number the posting states - a level-implied minimum is a
+    # guess and stays a component penalty.
+    "experience_short": 64,
+    "experience_stretch": 79,
     "location_incompatible": 60,
     # Not a judgement about the candidate: the resume yielded no readable
     # skill evidence at all, so required-skill coverage cannot be assessed
@@ -3662,6 +3673,22 @@ def _gap_text(gap: float) -> str:
     return "a year" if n == 1 else f"{max(1, n)} years"
 
 
+def _stated_years_short(reqs: Dict[str, Any], prof: Dict[str, Any]) -> Optional[float]:
+    """How many years the resume falls short of the minimum the posting
+    STATES, from dated months when there are any. None when either side is
+    unknown or nothing is stated."""
+    want = reqs.get("required_years")
+    if not isinstance(want, (int, float)) or isinstance(want, bool):
+        return None
+    have = prof.get("years")
+    months = prof.get("experience_months")
+    if isinstance(months, (int, float)) and months >= 0:
+        have = float(months) / 12.0
+    if not isinstance(have, (int, float)):
+        return None
+    return float(want) - float(have)
+
+
 def _score_experience(reqs: Dict[str, Any], prof: Dict[str, Any],
                       alignment: Optional[Dict[str, Any]] = None
                       ) -> Tuple[float, str, bool, bool]:
@@ -4107,6 +4134,15 @@ def _hard_constraints(reqs: Dict[str, Any], prof: Dict[str, Any],
         out.append({"type": "experience_gap", "status": "missing",
                     "cap": CONSTRAINT_CAPS["severe_experience_gap"],
                     "detail": "The experience this posting asks for is well above yours."})
+    else:
+        short = _stated_years_short(reqs, prof)
+        if short is not None and short > 1:
+            want = reqs.get("required_years")
+            key = "experience_short" if short >= 2 else "experience_stretch"
+            out.append({"type": key, "status": "missing",
+                        "cap": CONSTRAINT_CAPS[key],
+                        "detail": (f"This posting asks for {want}+ years; you are about "
+                                   f"{_gap_text(short)} short of that.")})
     if location_bad:
         out.append({"type": "location", "status": "missing",
                     "cap": CONSTRAINT_CAPS["location_incompatible"],
