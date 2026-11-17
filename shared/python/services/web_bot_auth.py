@@ -244,7 +244,8 @@ def _blueprint():
 
     bp = Blueprint("crawler_identity", __name__)
 
-    @bp.route(DIRECTORY_PATH, methods=["GET"])
+    @bp.route(DIRECTORY_PATH, methods=["GET"], strict_slashes=False)
+    @bp.route(DIRECTORY_PATH + "/", methods=["GET"])
     def key_directory():
         out = directory_response(request.host)
         if out is None:

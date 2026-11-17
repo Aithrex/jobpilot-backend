@@ -128,6 +128,8 @@ class TestKeyDirectory:
         assert r.status_code == 200
         assert r.headers["Content-Type"] == wba.DIRECTORY_CONTENT_TYPE
         assert r.headers["Signature"].startswith("sig1=:")
+        slash = c.get("/.well-known/http-message-signatures-directory/", headers={"Host": "aspirely.me"})
+        assert slash.status_code == 200 and slash.headers["Content-Type"] == wba.DIRECTORY_CONTENT_TYPE
         page = c.get("/bot")
         assert page.status_code == 200 and b"robots.txt" in page.data
 
