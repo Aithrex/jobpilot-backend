@@ -227,7 +227,7 @@ def test_review_queue_cost_does_not_grow_with_the_size_of_the_tracker():
     assert large < small * 8 + 0.002, "cost per email grew with the tracker"
 
 
-def _old_interview_move(at, touched=None):
+def _old_interview_move(at, touched=None, message="F1"):
     """The card was moved to interviewing by itself off email F1 under the old
     rules; `touched` is when the person last changed it, if after."""
     def before(db):
@@ -236,8 +236,8 @@ def _old_interview_move(at, touched=None):
             "application.gmail_updated_at": at}})
         db.gmail_suggestions.insert_one({
             "_id": "old-move", "suggestion_id": "old-move", "user_email": USER,
-            "record_id": "vandelay-backend", "gmail_message_id": "F1", "evidence_message_id": "F1",
-            "supporting_message_ids": ["F1"], "current_status": "applied",
+            "record_id": "vandelay-backend", "gmail_message_id": message, "evidence_message_id": message,
+            "supporting_message_ids": [message], "current_status": "applied",
             "suggested_status": "interviewing", "auto_applied": True, "applied": True,
             "applied_at": at, "dismissed": False, "created_at": at})
     return before
@@ -260,3 +260,13 @@ def test_a_card_the_person_changed_since_is_left_alone(scan):
     statuses, _, _ = scan([f1], before=_old_interview_move(at, touched=at + timedelta(days=1)))
     assert statuses["vandelay-backend"] == "interviewing"
     assert not current_db().gmail_suggestions.find_one({"_id": "old-move"}).get("undone")
+
+
+def test_a_move_made_from_a_receipt_by_its_subject_is_put_back(scan):
+    """The Brown University Health case (2026-11-16): 'Application Received for
+    Cloud Engineer II' moved the card to Interviewing on 'we would like to
+    schedule an interview'."""
+    f6 = next(e for e in corpus.EMAILS if e["id"] == "F6")
+    statuses, _, _ = scan([f6], before=_old_interview_move(NOW - timedelta(days=1), message="F6"))
+    assert statuses["vandelay-backend"] == "applied"
+    assert current_db().gmail_suggestions.find_one({"_id": "old-move"})["retracted_by_rules"] is True
