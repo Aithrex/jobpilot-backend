@@ -109,6 +109,11 @@ def create_app():
     from blueprints.learning import learning_bp
     app.register_blueprint(learning_bp, url_prefix='/api/learning')
 
+    # The crawler's public identity: the Web Bot Auth key directory and the
+    # page its User-Agent links to. nginx routes exactly these two paths here.
+    from services.web_bot_auth import crawler_identity_bp
+    app.register_blueprint(crawler_identity_bp)
+
     # Each service used to answer its own /health under its prefix through the
     # edge; the deploy health gate and CI read the revision from here.
     @app.route('/api/health')

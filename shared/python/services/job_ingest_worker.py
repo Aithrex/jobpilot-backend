@@ -1830,9 +1830,10 @@ WORKDAY_GATE = VendorGate(
 
 
 def reset_workday_gate() -> VendorGate:
-    """A fresh gate from the module settings (tests; a process restart does
-    the same in production)."""
+    """A fresh gate (and cookie jars) from the module settings (tests; a
+    process restart does the same in production)."""
     global WORKDAY_GATE
+    WORKDAY_COOKIES.clear()
     WORKDAY_GATE = VendorGate(
         "workday", interval=WORKDAY_INTERVAL, min_interval=WORKDAY_MIN_INTERVAL,
         max_interval=WORKDAY_MAX_INTERVAL, cooldown=WORKDAY_COOLDOWN_SECONDS,
@@ -1840,8 +1841,64 @@ def reset_workday_gate() -> VendorGate:
     return WORKDAY_GATE
 
 
+class HostCookies:
+    """One cookie jar per host, shared by every thread of the process.
+
+    Cloudflare's bot management sets `__cf_bm` (and similar) on its first
+    answer and expects a well-behaved client to send it back. `requests.post`
+    without a session drops every cookie, so each request arrived as a brand
+    new visitor. Keeping the jar is ordinary HTTP client behaviour: we send
+    back exactly what the site set, nothing forged. `http.cookiejar` takes its
+    own lock, and expired cookies are not sent."""
+
+    MAX_HOSTS = 5000
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._jars: Dict[str, Any] = {}
+
+    def jar(self, host: str):
+        from requests.cookies import RequestsCookieJar
+
+        with self._lock:
+            jar = self._jars.get(host)
+            if jar is None:
+                if len(self._jars) >= self.MAX_HOSTS:
+                    self._jars.clear()
+                jar = self._jars[host] = RequestsCookieJar()
+            return jar
+
+    def remember(self, host: str, resp: Any) -> None:
+        cookies = getattr(resp, "cookies", None)
+        if not cookies:
+            return
+        try:
+            self.jar(host).update(cookies)
+        except Exception:
+            pass
+
+    def clear(self) -> None:
+        with self._lock:
+            self._jars.clear()
+
+
+WORKDAY_COOKIES = HostCookies()
+
+
 def _vendor_gate_for(host: str) -> Optional[VendorGate]:
     return WORKDAY_GATE if str(host or "").endswith(".myworkdayjobs.com") else None
+
+
+def _web_bot_auth_headers(url: str) -> Dict[str, str]:
+    """Signature headers for `url`, or nothing (off, unconfigured, or the
+    signer failed - a request is never blocked on its signature)."""
+    try:
+        from services import web_bot_auth
+
+        return web_bot_auth.sign_request_headers(url) if web_bot_auth.should_sign(url) else {}
+    except Exception as exc:
+        logger.warning("ingest: web bot auth signing failed (%s)", type(exc).__name__)
+        return {}
 
 
 def _is_challenge(resp: Any) -> bool:
@@ -1971,18 +2028,25 @@ def http_get_json(source: str, url: str, policy: HostPolicy, *,
             return None
         eff_timeout = max(0.5, min(float(timeout), remaining))
         headers = dict(_HTTP_HEADERS, **(extra_headers or {}))
+        send: Dict[str, Any] = {"headers": headers, "timeout": eff_timeout}
+        if gate is not None:
+            # Behind a bot wall: send back the cookies the site set, and sign
+            # the request once the owner has turned Web Bot Auth on.
+            send["cookies"] = WORKDAY_COOKIES.jar(host)
+            headers.update(_web_bot_auth_headers(url))
         try:
             if method == "POST":
-                resp = requests.post(url, json=json_body or {},
-                                     headers=headers, timeout=eff_timeout)
+                resp = requests.post(url, json=json_body or {}, **send)
             else:
-                resp = requests.get(url, headers=headers, timeout=eff_timeout)
+                resp = requests.get(url, **send)
         except Exception as exc:  # requests.RequestException and friends
             policy.note_failure(host)
             logger.debug("ingest %s: network error on %s (%s)", source, host,
                          type(exc).__name__)
         else:
             _note_http_status(resp.status_code)
+            if gate is not None:
+                WORKDAY_COOKIES.remember(host, resp)
             if gate is not None and _is_challenge(resp):
                 # Never retry into a bot wall: every retry deepens it.
                 gate.note_challenge()
@@ -2033,7 +2097,7 @@ GONE_CONFIRM_HOURS = _env_float("JOB_INGEST_GONE_CONFIRM_HOURS", 20.0)
 
 
 _HTTP_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; JobPilotIngest/1.0)",
+    "User-Agent": "Mozilla/5.0 (compatible; JobPilotIngest/1.1; +https://aspirely.me/bot)",
     "Accept": "application/json",
     "Content-Type": "application/json",
 }
@@ -2041,7 +2105,7 @@ _HTTP_HEADERS = {
 # A public apply page is HTML and often bot-sensitive, so the probe does not
 # claim to want JSON and does not send a JSON content type.
 _PROBE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; JobPilotIngest/1.0)",
+    "User-Agent": "Mozilla/5.0 (compatible; JobPilotIngest/1.1; +https://aspirely.me/bot)",
     "Accept": "text/html,application/xhtml+xml",
 }
 
