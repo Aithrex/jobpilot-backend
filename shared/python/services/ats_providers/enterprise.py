@@ -101,7 +101,14 @@ class PhenomProvider(AtsProvider):
     has_detail = True
     date_confidence = DATE_EXACT
     slug_probe = False
-    policy = _ENTERPRISE_POLICY
+    #: 200 rows a page, not 20. The termless search is in relevance order (no
+    #: newest-first sort the API honours), so the whole board is read to find
+    #: the fresh rows, and at 20 a page TJX's 9,777 rows took 489 requests:
+    #: its shard hit the 300 s budget on 2026-11-17 and stored nothing. Phenom
+    #: answers size=200 in under half a second (TJX, measured). A tenant that
+    #: caps the page lower is still read to its reported total, because paging
+    #: advances by the rows each page actually returned.
+    policy = _dc_replace(_ENTERPRISE_POLICY, page_size=200, max_pages=60)
 
     api_hosts = (
         "careers.usbank.com",
@@ -208,7 +215,7 @@ class PhenomProvider(AtsProvider):
             body = {
                 "lang": "en_us", "deviceType": "desktop", "country": "us",
                 "pageName": "search-results", "ddoKey": "refineSearch",
-                "sortBy": "", "from": page * size, "jobs": True, "counts": True,
+                "sortBy": "", "from": read_count, "jobs": True, "counts": True,
                 "all_fields": ["category", "country", "state", "city", "type"],
                 "size": size, "keywords": "", "global": True,
                 # No server-side country filter: tenants disagree on the value
@@ -257,7 +264,10 @@ class PhenomProvider(AtsProvider):
                     continue
                 yield raw
             read_count += len(jobs)
-            if len(jobs) < size:
+            # A short page ends the board only when no total says otherwise:
+            # a tenant that caps `size` below ours returns short pages all the
+            # way down, and `from` advances by what each page returned.
+            if len(jobs) < size and (total is None or read_count >= total):
                 ctx.listing_truncated = len(seen) < total if total is not None else overlap
                 return
             if total is not None and read_count >= total:

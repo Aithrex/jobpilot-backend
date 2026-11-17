@@ -177,3 +177,35 @@ class TestOneCardPerJob:
         b = _doc("phenom", "tjx", "phenom-tjx", "R2", "https://jobs.tjx.com/global/en/job/R2/b", now)
         out = feed._dedupe([feed._row_from_posting(d, tz_offset=0) for d in (a, b)])
         assert len(out) == 2
+
+
+class TestPhenomBigBoards:
+    """2026-11-17: TJX (9,777 rows, relevance order) took 489 requests at 20 a
+    page; its shard hit the 300 s budget and stored nothing."""
+
+    def _pages(self, sizes, total):
+        sent = []
+        rows = iter(range(10 ** 6))
+
+        def post_json(url, json_body=None, **k):
+            sent.append(json_body["from"])
+            n = sizes.pop(0) if sizes else 0
+            jobs = [dict(TJX_ROW, reqId=f"R{next(rows)}", jobSeqNo=f"S{len(sent)}-{i}") for i in range(n)]
+            return 200, {"refineSearch": {"totalHits": total, "data": {"jobs": jobs}}}
+        return post_json, sent
+
+    def test_pages_are_two_hundred_rows(self):
+        assert e.PhenomProvider.policy.page_size == 200
+
+    def test_a_tenant_that_caps_the_page_lower_is_read_to_its_total(self):
+        post_json, sent = self._pages([50, 50, 50], total=150)
+        ep = Endpoint(vendor="phenom", tenant="tjx", host="jobs.tjx.com", extra={"requisition_ids": True})
+        rows = list(e.PhenomProvider().list_jobs(ep, _ctx(post_json=post_json)))
+        assert len(rows) == 150
+        assert sent == [0, 50, 100], "advances by what each page returned"
+
+    def test_a_short_page_with_no_total_ends_the_board(self):
+        post_json, sent = self._pages([30], total=None)
+        ep = Endpoint(vendor="phenom", tenant="tjx", host="jobs.tjx.com")
+        assert len(list(e.PhenomProvider().list_jobs(ep, _ctx(post_json=post_json)))) == 30
+        assert sent == [0]
