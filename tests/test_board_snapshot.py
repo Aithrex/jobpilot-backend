@@ -70,13 +70,18 @@ class TestSignature:
         b = bs.signature(bs.params_of(_payload(titles=["  backend engineer "])))
         assert a == b
 
-    def test_title_order_scope_and_zone_do(self):
+    def test_title_order_and_zone_do(self):
         base = bs.signature(bs.params_of(_payload()))
         assert base != bs.signature(bs.params_of(
             _payload(titles=["Platform Engineer", "Backend Engineer"])))
-        assert base != bs.signature(bs.params_of(_payload(remote_only=True)))
-        assert base != bs.signature(bs.params_of(_payload(location="Texas")))
         assert base != bs.signature(bs.params_of(_payload(tz_offset_minutes=-480)))
+
+    def test_place_and_remote_never_make_another_board(self):
+        """The board carries every country and the browser filters by place
+        (2026-11-16), so a country change reads the SAME stored board."""
+        base = bs.signature(bs.params_of(_payload()))
+        for over in ({"remote_only": True}, {"location": "Texas"}, {"us_only": False}):
+            assert base == bs.signature(bs.params_of(_payload(**over))), over
 
     def test_scan_only_fields_are_not_part_of_the_answer(self):
         assert bs.signature(bs.params_of(_payload())) == bs.signature(

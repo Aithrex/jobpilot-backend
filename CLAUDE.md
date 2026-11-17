@@ -573,6 +573,17 @@ the board got slow. Now:
 
 Dropping both collections returns the board to scanning on every open.
 
+**Every country, filtered in the browser (2026-11-16).** A board build
+(`board: "for_you"`, scans and refresh alike) keeps non-US cards too, each card
+tagged `geo_us` (the `us_geo.keep_us_row` verdict). US cards are capped exactly
+as before (`GLOBAL_KEEP`); up to `FEED_INTL_KEEP` (400) others are kept apart
+and never displace one; `window_counts` and the thin-slice check count US cards
+only. `board_snapshot.params_of` pins `location=""`, `us_only=True`,
+`remote_only=False` for every board request, and `build_feed` ignores
+`remote_only` for the board, so place and remote never make a different board
+and a country change on Jobs is a client filter, never a scan. Other surfaces
+are unchanged (US-only, untagged).
+
 **One list, one scorer (2026-11-03).** The individual catalog tabs are gone from
 the UI; the board is the union of every vendor the crawler reads (Workday,
 Oracle, iCIMS and the 30+ `career-pages` vendors). Two rules keep it one list:

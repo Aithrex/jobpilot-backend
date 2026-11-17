@@ -1067,6 +1067,9 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     # The For-you board (its scans and the 30-minute rebuild both say so)
     # carries every country, each card tagged `geo_us`; the client filters.
     all_geos = str(payload.get("board") or "") == "for_you"
+    if all_geos:
+        # Remote-only is a filter in the browser too (`is_remote` on cards).
+        remote_only = False
     try:
         min_salary = float(payload.get("min_salary") or 0) or 0.0
     except (TypeError, ValueError):
