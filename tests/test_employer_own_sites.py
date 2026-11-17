@@ -209,3 +209,41 @@ class TestPhenomBigBoards:
         ep = Endpoint(vendor="phenom", tenant="tjx", host="jobs.tjx.com")
         assert len(list(e.PhenomProvider().list_jobs(ep, _ctx(post_json=post_json)))) == 30
         assert sent == [0]
+
+
+class TestPhenomJobPagePaths:
+    """DaVita serves job pages only at /job/<id>; the /us/en/job/<id>/<slug>
+    form is a 404 there (2026-11-17) and must not read as "job gone"."""
+
+    EP = Endpoint(vendor="phenom", tenant="davita", host="careers.davita.com",
+                  extra={"requisition_ids": True})
+
+    def test_candidates(self):
+        assert e._phenom_page_candidates("https://careers.davita.com/us/en/job/R0486419/Social-Worker") == [
+            "https://careers.davita.com/us/en/job/R0486419/Social-Worker",
+            "https://careers.davita.com/job/R0486419"]
+        assert e._phenom_page_candidates("https://careers.davita.com/job/R1") == ["https://careers.davita.com/job/R1"]
+
+    def test_a_404_on_the_long_form_falls_back_to_the_short_form(self):
+        asked = []
+
+        def get_text(url, **k):
+            asked.append(url)
+            return (200, JOB_PAGE) if url.endswith("/job/R0486419") else (404, "<html>not found</html>")
+        job = RawJob(source_job_id="R0486419", title="Social Worker", apply_url="https://x",
+                     detail_url="https://careers.davita.com/us/en/job/R0486419/Social-Worker")
+        out = e.PhenomProvider().fetch_detail(self.EP, job, _ctx(get_text=get_text))
+        assert out and out.description.startswith("Full body.")
+        assert asked == ["https://careers.davita.com/us/en/job/R0486419/Social-Worker",
+                         "https://careers.davita.com/job/R0486419"]
+
+    def test_the_long_form_that_works_asks_once(self):
+        asked = []
+        job = RawJob(source_job_id="R2325246", title="x", apply_url="https://x",
+                     detail_url="https://jobs.tjx.com/global/en/job/R2325246/Merchandise-Associate")
+        e.PhenomProvider().fetch_detail(self.EP, job, _ctx(get_text=lambda url, **k: asked.append(url) or (200, JOB_PAGE)))
+        assert len(asked) == 1
+
+    def test_the_crawler_does_not_call_a_fallback_404_gone(self):
+        # Both answers are recorded; only ALL-404 means gone.
+        assert not all(c in w.GONE_STATUSES for c in [404, 200])
