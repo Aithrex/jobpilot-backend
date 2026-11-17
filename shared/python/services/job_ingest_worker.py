@@ -272,6 +272,23 @@ HOST_FAILURE_THRESHOLD = _env_int("JOB_INGEST_HOST_FAILURES", 4)
 RETRY_ATTEMPTS = _env_int("JOB_INGEST_RETRY_ATTEMPTS", 2)
 RETRY_BASE_SECONDS = _env_float("JOB_INGEST_RETRY_BASE", 0.4)
 
+# One process-wide brake for Workday (`VendorGate`, below). Workday puts every
+# tenant on its own hostname (`<tenant>.wd5.myworkdayjobs.com`), so the
+# per-host spacing above never slows the vendor as a whole: 16 shards x 6
+# workers reached tens of requests a second from one IP. From 2026-11-14 the
+# boards sit behind Cloudflare bot management, which answers that volume with
+# 429 "Security Check" (`cf-mitigated: challenge`) - 94.6% of the new Workday
+# postings of 2026-11-17 got no description and ~16,000 open postings were
+# closed as unseen in two days. The gate spaces Workday requests across the
+# whole process, stops for a cooldown when challenged, and only speeds back up
+# after a run of clean answers.
+WORKDAY_INTERVAL = _env_float("JOB_INGEST_WORKDAY_INTERVAL", 1.0)
+WORKDAY_MIN_INTERVAL = _env_float("JOB_INGEST_WORKDAY_MIN_INTERVAL", 0.4)
+WORKDAY_MAX_INTERVAL = _env_float("JOB_INGEST_WORKDAY_MAX_INTERVAL", 8.0)
+WORKDAY_COOLDOWN_SECONDS = _env_float("JOB_INGEST_WORKDAY_COOLDOWN", 120.0)
+WORKDAY_MAX_COOLDOWN_SECONDS = _env_float("JOB_INGEST_WORKDAY_MAX_COOLDOWN", 1800.0)
+WORKDAY_RECOVER_AFTER = _env_int("JOB_INGEST_WORKDAY_RECOVER_AFTER", 100)
+
 # How many shards one scheduled tick enqueues. This is the concurrency bound on
 # self-invoked ingest Lambdas; there is no queue to throttle us.
 MAX_SHARDS_PER_TICK = _env_int("JOB_INGEST_SHARDS_PER_TICK", 16)
@@ -1714,6 +1731,131 @@ def assert_own_site_url(own_host: str, url: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Vendor-wide brake (Workday)
+# ---------------------------------------------------------------------------
+
+class VendorGate:
+    """Process-wide spacing and challenge cooldown for ONE vendor.
+
+    Unlike `HostPolicy` this is shared by every shard in the process, because
+    the vendor's bot wall counts requests per source IP, not per run or per
+    hostname. Three rules:
+
+    * spacing - one request per `interval` seconds across all threads. A
+      caller that cannot get a slot before its deadline is refused WITHOUT
+      booking one, so a refusal never pushes later callers back;
+    * challenge - a 429 or a Cloudflare challenge doubles the interval (up to
+      `max_interval`) and closes the gate for a cooldown that doubles with each
+      consecutive challenge (up to `max_cooldown`);
+    * recovery - after `recover_after` clean answers in a row the interval
+      shrinks by 15%, never below `min_interval`, and the strike count resets.
+
+    A refused or challenged request says nothing about the posting, so callers
+    record it per thread (`refusals()`) and the detail stage treats it as a cut,
+    never as a miss.
+    """
+
+    def __init__(self, name: str, *, interval: float, min_interval: float,
+                 max_interval: float, cooldown: float, max_cooldown: float,
+                 recover_after: int, clock: Callable[[], float] = time.monotonic,
+                 sleep: Callable[[float], None] = time.sleep):
+        self.name = name
+        self._lock = threading.Lock()
+        self._clock, self._sleep = clock, sleep
+        self._min = max(0.0, float(min_interval))
+        self._max = max(self._min, float(max_interval))
+        self.interval = min(self._max, max(self._min, float(interval)))
+        self._cooldown = max(1.0, float(cooldown))
+        self._max_cooldown = max(self._cooldown, float(max_cooldown))
+        self._recover_after = max(1, int(recover_after))
+        self._next_at = 0.0
+        self.closed_until = 0.0
+        self.strikes = 0
+        self._clean = 0
+        self.challenges = 0
+        self._refusals = threading.local()
+
+    def acquire(self, *, deadline: float, stop: Optional[threading.Event] = None) -> bool:
+        with self._lock:
+            now = self._clock()
+            if now < self.closed_until:
+                return False
+            slot = max(now, self._next_at)
+            if slot > now and slot >= deadline:
+                return False
+            self._next_at = slot + self.interval
+        wait = slot - self._clock()
+        while wait > 0:
+            if stop is not None and stop.is_set():
+                return False
+            self._sleep(min(wait, 0.5))
+            wait = slot - self._clock()
+        return True
+
+    def note_ok(self) -> None:
+        with self._lock:
+            self._clean += 1
+            if self._clean >= self._recover_after:
+                self._clean = 0
+                self.strikes = 0
+                self.interval = max(self._min, self.interval * 0.85)
+
+    def note_challenge(self) -> None:
+        with self._lock:
+            now = self._clock()
+            self.challenges += 1
+            self._clean = 0
+            if now < self.closed_until:
+                return  # already cooling down: one challenge wave, one strike
+            self.strikes += 1
+            self.interval = min(self._max, max(self.interval, self._min) * 2)
+            pause = min(self._max_cooldown, self._cooldown * (2 ** (self.strikes - 1)))
+            self.closed_until = now + pause
+            self._next_at = max(self._next_at, self.closed_until)
+        logger.warning("ingest %s: challenged, pausing %.0fs, interval now %.2fs (strike %d)",
+                       self.name, pause, self.interval, self.strikes)
+
+    def note_refused(self) -> None:
+        self._refusals.count = getattr(self._refusals, "count", 0) + 1
+
+    def refusals(self) -> int:
+        """Requests this gate refused or saw challenged, on the calling thread."""
+        return getattr(self._refusals, "count", 0)
+
+
+WORKDAY_GATE = VendorGate(
+    "workday", interval=WORKDAY_INTERVAL, min_interval=WORKDAY_MIN_INTERVAL,
+    max_interval=WORKDAY_MAX_INTERVAL, cooldown=WORKDAY_COOLDOWN_SECONDS,
+    max_cooldown=WORKDAY_MAX_COOLDOWN_SECONDS, recover_after=WORKDAY_RECOVER_AFTER)
+
+
+def reset_workday_gate() -> VendorGate:
+    """A fresh gate from the module settings (tests; a process restart does
+    the same in production)."""
+    global WORKDAY_GATE
+    WORKDAY_GATE = VendorGate(
+        "workday", interval=WORKDAY_INTERVAL, min_interval=WORKDAY_MIN_INTERVAL,
+        max_interval=WORKDAY_MAX_INTERVAL, cooldown=WORKDAY_COOLDOWN_SECONDS,
+        max_cooldown=WORKDAY_MAX_COOLDOWN_SECONDS, recover_after=WORKDAY_RECOVER_AFTER)
+    return WORKDAY_GATE
+
+
+def _vendor_gate_for(host: str) -> Optional[VendorGate]:
+    return WORKDAY_GATE if str(host or "").endswith(".myworkdayjobs.com") else None
+
+
+def _is_challenge(resp: Any) -> bool:
+    """A bot wall's answer: 429, or any status Cloudflare marks as mitigated."""
+    if getattr(resp, "status_code", None) == 429:
+        return True
+    headers = getattr(resp, "headers", None) or {}
+    try:
+        return bool(headers.get("cf-mitigated"))
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Per-host rate limiting + circuit breaking
 # ---------------------------------------------------------------------------
 
@@ -1811,9 +1953,13 @@ def http_get_json(source: str, url: str, policy: HostPolicy, *,
 
     assert_outbound_url(source, url)
     host = HostPolicy.host_of(url)
+    gate = _vendor_gate_for(host)
     attempts = max(1, int(RETRY_ATTEMPTS))
     for attempt in range(attempts):
         if (stop is not None and stop.is_set()) or time.monotonic() >= deadline:
+            return None
+        if gate is not None and not gate.acquire(deadline=deadline, stop=stop):
+            gate.note_refused()
             return None
         if not policy.acquire(host, deadline=deadline, stop=stop):
             return None
@@ -1837,7 +1983,14 @@ def http_get_json(source: str, url: str, policy: HostPolicy, *,
                          type(exc).__name__)
         else:
             _note_http_status(resp.status_code)
+            if gate is not None and _is_challenge(resp):
+                # Never retry into a bot wall: every retry deepens it.
+                gate.note_challenge()
+                gate.note_refused()
+                return None
             if resp.status_code == 200:
+                if gate is not None:
+                    gate.note_ok()
                 policy.note_success(host)
                 try:
                     return resp.json()
@@ -2198,9 +2351,12 @@ def _list_workday(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolic
         data = http_get_json(SOURCE_WORKDAY, url, policy, deadline=deadline,
                              stop=stop, method="POST", json_body=body)
         if not isinstance(data, dict):
-            # A failed page part way down a board leaves the rest unread; only
-            # a first-page failure means "nothing here".
-            truncated = page > 0
+            # A failed page - first or later - proves nothing about the board:
+            # a 429 or a Cloudflare challenge on page one used to count as an
+            # empty, COMPLETE listing, which let `_close_stale_in_shard` close
+            # every open posting of that employer as "not seen". An empty
+            # board answers 200 with no postings (the branch below).
+            truncated = True
             break
         postings = data.get("jobPostings") or []
         if not isinstance(postings, list) or not postings:
@@ -3805,7 +3961,7 @@ def run_shard(
 
         def _fetch_timed(pair):
             _HTTP_STATUSES.codes = []
-            refused_before = detail_session.refusals()
+            refused_before = detail_session.refusals() + WORKDAY_GATE.refusals()
             try:
                 body = fetch_detail(pair[1], pair[0], policy=policy, deadline=deadline,
                                     stop=stop, session=detail_session)
@@ -3815,10 +3971,11 @@ def run_shard(
             if time.monotonic() >= deadline - DEADLINE_CUT_SECONDS or (
                     stop is not None and stop.is_set()):
                 cut_ids.add(id(pair[1]))
-            if detail_session.refusals() > refused_before:
+            if detail_session.refusals() + WORKDAY_GATE.refusals() > refused_before:
                 # Our own pacing turned a request away before it was sent (no
                 # slot before the deadline, a breaker another posting tripped,
-                # a full concurrency slot). The site said nothing about THIS
+                # a full concurrency slot, the Workday gate cooling down), or a
+                # bot wall challenged it. Neither says anything about THIS
                 # posting, so it is not a miss: the next run asks again.
                 cut_ids.add(id(pair[1]))
                 refused_ids.add(id(pair[1]))
@@ -4228,8 +4385,43 @@ def run_maintenance(*, now: Optional[datetime] = None,
 VERIFY_STALE_HOURS = _env_int("JOB_INGEST_VERIFY_STALE_HOURS", 72)
 
 
-def verify_liveness(*, limit: int = 200, now: Optional[datetime] = None
-                    ) -> Dict[str, int]:
+#: `verify_liveness` closes nothing for a source whose listings in the last 24h
+#: fell below this share of its usual day (the median of the six days before).
+#: Not seeing a posting only means it is gone when the crawl is seeing the
+#: boards at all: on 2026-11-16/17 Workday's bot wall cut listing rows from
+#: ~3M a day to 37k, and this sweep closed ~13,800 open Workday postings.
+VERIFY_MIN_LISTING_HEALTH = _env_float("JOB_INGEST_VERIFY_MIN_HEALTH", 0.5)
+
+
+def _source_listing_health(source: str, now: datetime) -> Optional[float]:
+    """Listing rows fetched in the last 24h over the median of the six 24h
+    windows before it, from `job_ingestion_runs`. None when there is no usable
+    history (a new source, or no run log), which the caller treats as healthy."""
+    start = now - timedelta(days=7)
+    days = [0] * 7   # index 0 = the last 24h
+    try:
+        cursor = inv._runs().find(
+            {"source": source, "started_at": {"$gte": start}},
+            {"_id": 0, "started_at": 1, "counts.fetched": 1})
+        for run in cursor:
+            started = _parse_iso(run.get("started_at"))
+            if started is None:
+                continue
+            age = int((now - started).total_seconds() // 86400)
+            if 0 <= age < 7:
+                days[age] += int(((run.get("counts") or {}).get("fetched")) or 0)
+    except Exception as exc:
+        logger.warning("ingest %s: listing health unavailable (%s)", source, type(exc).__name__)
+        return None
+    baseline = sorted(days[1:])[3]   # median of 6 (upper middle)
+    if baseline <= 0:
+        return None
+    return days[0] / baseline
+
+
+def verify_liveness(*, limit: int = 200, now: Optional[datetime] = None,
+                    health: Optional[Callable[[str, datetime], Optional[float]]] = None
+                    ) -> Dict[str, Any]:
     """Close postings the crawl has stopped seeing.
 
     `_close_stale_in_shard` already does this per shard, but only for shards that
@@ -4241,9 +4433,18 @@ def verify_liveness(*, limit: int = 200, now: Optional[datetime] = None
     """
     now = now or _utcnow()
     cutoff = now - timedelta(hours=max(1, VERIFY_STALE_HOURS))
-    out = {"checked": 0, "closed": 0}
+    out: Dict[str, Any] = {"checked": 0, "closed": 0, "skipped_sources": {}}
     per_source = max(1, int(limit) // max(1, len(SOURCES)))
+    health = health or _source_listing_health
     for src in SOURCES:
+        ratio = health(src, now)
+        if ratio is not None and ratio < VERIFY_MIN_LISTING_HEALTH:
+            # The crawl is not seeing this source's boards (a bot wall, an
+            # outage): "not re-seen in 72h" is a fact about us, not the jobs.
+            out["skipped_sources"][src] = round(ratio, 3)
+            logger.warning("verify_liveness: %s listing at %.0f%% of its usual day, "
+                           "closing nothing", src, 100 * ratio)
+            continue
         rows = inv.find_stale_for_verification(src, older_than=cutoff, limit=per_source)
         out["checked"] += len(rows)
         for row in rows:
