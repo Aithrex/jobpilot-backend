@@ -2880,6 +2880,103 @@ BACKLOG_PER_MEMBER = _env_int("JOB_INGEST_BACKLOG_PER_MEMBER", 10)
 #: by it (`fetch_detail` shortens its timeouts to the remaining budget), so
 #: its emptiness is the budget's, not the posting's.
 DEADLINE_CUT_SECONDS = _env_float("JOB_INGEST_DEADLINE_CUT_SECONDS", 2.0)
+#: Seconds one detail fetch takes when the site is not slowing us down. Only
+#: used to PLAN how many fetches one pacing key can serve before the run's
+#: deadline (`_plan_detail_fetches`). A low guess costs a refusal near the end
+#: of the run, which is a deferral and never a miss.
+DETAIL_FETCH_SECONDS = _env_float("JOB_INGEST_DETAIL_FETCH_SECONDS", 1.0)
+
+
+def _detail_pacing(member: Dict[str, Any]) -> Optional[Tuple[str, float, int]]:
+    """`(key, min_interval, max_concurrency)` the run's shared pacing session
+    will hold this member's detail fetches to, or None when they do not go
+    through it (the legacy listing vendors are paced by `HostPolicy`).
+
+    The key is the provider's `pacing_key` when it has one - every iCIMS tenant
+    shares "icims.com" - and the board otherwise, which is the host the
+    session keys on."""
+    if _uses_legacy_listing(member) or not (USE_PROVIDERS or _is_regional_member(member)):
+        return None
+    registry = _ats_registry()
+    provider = registry.get(_vendor_of(member)) if registry is not None else None
+    policy = getattr(provider, "policy", None)
+    if policy is None or not getattr(provider, "has_detail", False):
+        return None
+    key = str(getattr(policy, "pacing_key", None) or f"board:{member.get('member_key')}")
+    try:
+        interval = max(0.0, float(getattr(policy, "min_interval", 0.0) or 0.0))
+        concurrency = max(1, int(getattr(policy, "max_concurrency", 1) or 1))
+    except (TypeError, ValueError):
+        interval, concurrency = 0.0, 1
+    return key, interval, concurrency
+
+
+def _plan_detail_fetches(new_rows: List[Tuple[Dict[str, Any], Dict[str, Any]]],
+                         backlog_rows: List[Tuple[Dict[str, Any], Dict[str, Any]]], *,
+                         seconds_left: float):
+    """Order a run's detail fetches and set aside what their pacing cannot serve.
+
+    Returns `(ordered, new_over, backlog_over)`.
+
+    Since one pacing session serves every detail fetch of a run (2026-11-05),
+    a key paced at 2.5 s (iCIMS, all tenants) or one request a second (an
+    employer's own site) can serve only so many fetches before the deadline.
+    Everything past that used to be handed to the workers anyway: they sat in
+    the key's queue, the queue refused them at the end, and each refusal was
+    written as a failed attempt on a NEW posting - so it waited an hour, then
+    six, then a day for its next try. Now the plan stops at what each key can
+    serve: the rest of the new rows are DEFERRED (written from the listing,
+    fetched next run, no miss), and the rest of the backlog is left untouched.
+
+    Within a key: newest new rows first, with `BACKLOG_DETAIL_SHARE` of the
+    key's capacity kept for its owed backlog. Across keys: round-robin, so the
+    workers spread over sites instead of all waiting on one site's pacing.
+    Members the shared session does not pace are interleaved but never capped.
+    """
+    groups: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+
+    def group_of(pair):
+        pacing = _detail_pacing(pair[0])
+        key = pacing[0] if pacing else f"unpaced:{pair[0].get('member_key')}"
+        g = groups.get(key)
+        if g is None:
+            cap = None
+            if pacing:
+                _key, interval, concurrency = pacing
+                per_fetch = max(interval, DETAIL_FETCH_SECONDS / concurrency, 1e-3)
+                cap = max(1, int(max(0.0, float(seconds_left)) / per_fetch))
+            g = groups[key] = {"cap": cap, "new": [], "old": []}
+            order.append(key)
+        return g
+
+    for pair in new_rows:
+        group_of(pair)["new"].append(pair)
+    for pair in backlog_rows:
+        group_of(pair)["old"].append(pair)
+
+    queues: List[List[Tuple[Dict[str, Any], Dict[str, Any]]]] = []
+    new_over: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    backlog_over: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    for key in order:
+        g = groups[key]
+        new, old, cap = g["new"], g["old"], g["cap"]
+        if cap is not None and len(new) + len(old) > cap:
+            keep_old = min(len(old), int(cap * BACKLOG_DETAIL_SHARE))
+            keep_new = min(len(new), cap - keep_old)
+            keep_old = min(len(old), cap - keep_new)
+            new_over.extend(new[keep_new:])
+            backlog_over.extend(old[keep_old:])
+            new, old = new[:keep_new], old[:keep_old]
+        if new or old:
+            queues.append(new + old)
+    ordered: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    while queues:
+        for queue in list(queues):
+            ordered.append(queue.pop(0))
+            if not queue:
+                queues.remove(queue)
+    return ordered, new_over, backlog_over
 
 
 def detail_retry_at(misses: int, now: datetime) -> datetime:
@@ -3688,8 +3785,27 @@ def run_shard(
         from services.ats_providers.http import PacedSession as _PacedSession
         detail_session = _PacedSession()
 
+        # Only what each pacing key can serve before the deadline is handed
+        # to the workers (`_plan_detail_fetches`); the rest waits for the next
+        # run without a miss.
+        planned, over_new, over_backlog = _plan_detail_fetches(
+            detail_targets, backlog_targets,
+            seconds_left=deadline - time.monotonic() - DEADLINE_CUT_SECONDS)
+        if over_new or over_backlog:
+            over = {id(p[1]) for p in over_new} | {id(p[1]) for p in over_backlog}
+            detail_targets = [p for p in detail_targets if id(p[1]) not in over]
+            backlog_targets = [p for p in backlog_targets if id(p[1]) not in over]
+            deferred = deferred + over_new
+            counts["detail_deferred"] += len(over_new)
+            counts["detail-over-pace"] += len(over_new)
+            counts["backlog-over-pace"] += len(over_backlog)
+            counts["backlog-attempted"] -= len(over_backlog)
+
+        refused_ids: set = set()
+
         def _fetch_timed(pair):
             _HTTP_STATUSES.codes = []
+            refused_before = detail_session.refusals()
             try:
                 body = fetch_detail(pair[1], pair[0], policy=policy, deadline=deadline,
                                     stop=stop, session=detail_session)
@@ -3699,6 +3815,13 @@ def run_shard(
             if time.monotonic() >= deadline - DEADLINE_CUT_SECONDS or (
                     stop is not None and stop.is_set()):
                 cut_ids.add(id(pair[1]))
+            if detail_session.refusals() > refused_before:
+                # Our own pacing turned a request away before it was sent (no
+                # slot before the deadline, a breaker another posting tripped,
+                # a full concurrency slot). The site said nothing about THIS
+                # posting, so it is not a miss: the next run asks again.
+                cut_ids.add(id(pair[1]))
+                refused_ids.add(id(pair[1]))
             if codes and all(c in GONE_STATUSES for c in codes):
                 gone_ids.add(id(pair[1]))
             if not codes:
@@ -3706,8 +3829,10 @@ def run_shard(
             return body
 
         details = run_bounded(
-            _fetch_timed, detail_targets + backlog_targets, max_workers=detail_workers,
+            _fetch_timed, planned, max_workers=detail_workers,
             deadline=deadline, stop=stop)
+        if refused_ids:
+            counts["detail-refused-by-pacing"] += len(refused_ids)
         # Body-in-listing rows join the write set without a request; so do the
         # deferred ones, with whatever the listing gave us.
         details = list(details) + [

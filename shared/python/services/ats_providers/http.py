@@ -83,6 +83,9 @@ class PacedSession:
         #: Keys currently serving an anti-bot challenge, with the monotonic time
         #: they may be retried. Vendor-wide, because that is how the wall counts.
         self.cooldowns: Dict[str, float] = {}
+        # Requests this session turned away BEFORE sending them, counted per
+        # thread (each fetch runs on one worker thread). See `note_refused`.
+        self._refusals = threading.local()
 
     # -- scope helpers -------------------------------------------------------
 
@@ -110,6 +113,26 @@ class PacedSession:
                 sem = threading.Semaphore(max(1, int(limit)))
                 self._semaphores[key] = sem
             return sem
+
+    # -- refusals -------------------------------------------------------------
+
+    def note_refused(self) -> None:
+        """A request this session turned away without sending it: no pacing
+        slot before the deadline, a tripped breaker, a cooldown, a full
+        concurrency slot, or the run stopping.
+
+        The caller has to be able to tell this apart from a site that answered
+        badly. Since one session paces every detail fetch of a run
+        (2026-11-05), a refusal is OUR queue being full - it says nothing about
+        the posting - and the crawler recorded each one as a failed attempt on
+        a new posting, pushing its next try out an hour, then six, then a day.
+        New postings with a body fell from 99.5% to 84% (watchdog, 2026-11-17).
+        """
+        self._refusals.count = getattr(self._refusals, "count", 0) + 1
+
+    def refusals(self) -> int:
+        """Requests refused so far on the CALLING thread."""
+        return int(getattr(self._refusals, "count", 0))
 
     # -- gating --------------------------------------------------------------
 
@@ -142,6 +165,11 @@ class PacedSession:
             if key in self.tripped:
                 return False
             earliest = max(now, self._next_at.get(key, 0.0))
+            if earliest > now and earliest >= deadline:
+                # No slot before the deadline. Reserve nothing: a refused
+                # caller used to book a slot anyway, pushing every later
+                # caller's turn out by an interval it never used.
+                return False
             wait_until = earliest + max(0.0, min_interval)
             if jitter:
                 wait_until += random.uniform(0.0, jitter)
@@ -149,8 +177,6 @@ class PacedSession:
         delay = earliest - now
         if delay <= 0:
             return True
-        if earliest >= deadline:
-            return False
         end = time.monotonic() + delay
         while time.monotonic() < end:
             if (stop is not None and getattr(stop, "is_set", bool)()) or \
@@ -291,23 +317,34 @@ def make_fetchers(
         headers = {**base, **(extra_headers or {})}
 
         attempts = max(1, int(retries))
+        sent = False
+
+        def _refused():
+            # Turned away before anything reached the site. Only when NOTHING
+            # was sent in this call: a 5xx followed by a retry the deadline
+            # refused is the site failing, not our queue being full.
+            if not sent:
+                session.note_refused()
+            return None, None
+
         for attempt in range(attempts):
             if (stop is not None and getattr(stop, "is_set", bool)()) or \
                     time.monotonic() >= deadline:
-                return None, None
+                return _refused()
             if not session.acquire(key, min_interval=policy.min_interval,
                                    jitter=policy.jitter, deadline=deadline,
                                    stop=stop):
-                return None, None
+                return _refused()
             remaining = deadline - time.monotonic()
             if remaining <= 0.5:
-                return None, None
+                return _refused()
             eff_timeout = max(0.5, min(float(timeout), remaining))
 
             sem = session.semaphore(key, policy.max_concurrency)
             acquired = sem.acquire(timeout=max(0.1, min(5.0, remaining)))
             if not acquired:
-                return None, None
+                return _refused()
+            sent = True
             try:
                 if method == "POST":
                     resp = req.post(url, params=params, json=json_body,
