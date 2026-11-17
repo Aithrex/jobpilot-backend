@@ -299,6 +299,12 @@ EMAILS: List[Dict[str, Any]] = [
          "Thank you for applying to the Systems Engineer role at Stark Industries. Learn about our "
          "interview process and explore our teams: https://starkindustries.test/careers/teams/cloud",
          expect=("not", "interviewing"), note="a careers page path that contains 'teams/'"),
+    mail("F6", "Vandelay Industries <vandelay@myworkday.com>",
+         "Vandelay Industries - Application Received for Backend Engineer JR-113072",
+         "Dear Priya, Thank you for applying to Vandelay Industries! Your application has been received. "
+         "We will carefully review your application and reach out if any additional information is needed. "
+         "We would like to schedule an interview with you.",
+         expect=("not", "interviewing_auto"), note="a receipt by its subject: interview wording is a question"),
     mail("I9", "Elaine Benes <elaine@vandelay.test>", "Vandelay Backend Engineer, next round",
          "Hi Priya,\n\nGreat news! We would like to move you forward to the next round of interviews "
          "for the Backend Engineer role at Vandelay Industries.\n\nElaine",

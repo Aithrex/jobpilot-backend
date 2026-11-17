@@ -1891,6 +1891,9 @@ _SOCIAL_PLUG = re.compile(
     r"\b(?:follow us|on (?:linkedin|twitter|instagram|facebook|youtube)|subscribe|newsletter|"
     r"talent (?:community|network)|join our community)\b", re.IGNORECASE)
 _INTERVIEW_RANK = {"soft": 1, "strong": 2}
+_RECEIPT_SUBJECT = re.compile(
+    r"\b(?:application (?:received|submitted|confirmation|acknowledg\w*)|thank(?:s| you) for (?:applying|your application|your interest)|"
+    r"we(?:['’]ve| have)? received your application|your application (?:to|for|with|has been received))\b", re.IGNORECASE)
 
 
 def _sentence_around(text: str, start: int, end: int) -> str:
@@ -2023,6 +2026,13 @@ def extract_deterministic_signals(messages: List[Dict[str, Any]]) -> Dict[str, A
         # The newest interview signal wins, unless an older email says it
         # more plainly (a soft "let's chat" never hides a real invitation).
         interview = _interview_signal(text)
+        # An email whose SUBJECT says it is a receipt ("Application Received
+        # for Cloud Engineer II") is a receipt, whatever its body promises:
+        # interview wording there is a question for the person, not a move,
+        # unless it carries a scheduling or assessment link.
+        if (interview and interview[1] == "strong" and _RECEIPT_SUBJECT.search(str(msg.get("subject") or ""))
+                and not _ACTION_LINK.search(interview[0]) and not _MEETING_LINK.search(interview[0])):
+            interview = (interview[0], "soft")
         if interview and _INTERVIEW_RANK[interview[1]] > _INTERVIEW_RANK.get(
                 (found.get("interviewing") or {}).get("strength"), 0):
             keep("interviewing", interview[0], msg, order,
