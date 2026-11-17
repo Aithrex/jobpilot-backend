@@ -192,7 +192,11 @@ NORMALIZATION_VERSION = 4
 # v16: the no-level audit's reader fixes above shipped AFTER v15 went live
 # (PR #44 merged with only the level hint), so postings already re-read under
 # v15 need one more pass to pick them up.
-EXTRACTOR_VERSION = 16
+#
+# v17: `_safe_jd_block` now STORES `jd.level_hint`. v15 and v16 read it on
+# every posting and the storage allowlist dropped it, so the card's
+# `level_estimate` was never shown. One more stored-body re-read fills it in.
+EXTRACTOR_VERSION = 17
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1
@@ -444,6 +448,8 @@ def _safe_jd_block(block: Any) -> Dict[str, Any]:
     education = jd.get("education") if isinstance(jd.get("education"), dict) else {}
     experience = jd.get("experience") if isinstance(jd.get("experience"), dict) else {}
     groups = jd.get("skill_alternatives")
+    hint = jd.get("level_hint") if isinstance(jd.get("level_hint"), dict) else {}
+    hint_level = _safe_family(hint.get("level"), 20)
     return {
         "v": _safe_version(jd.get("v")),
         "sponsorship": {"status": _safe_family(sponsorship.get("status"), 20),
@@ -465,6 +471,11 @@ def _safe_jd_block(block: Any) -> Dict[str, Any]:
         "employment_type": _safe_family(jd.get("employment_type"), 20),
         "skill_alternatives": [_safe_skills(g, limit=5)
                                for g in (groups if isinstance(groups, list) else [])[:8]],
+        # Read since v15 but never STORED until v17: this allowlist rebuilt the
+        # block without it, so not one of 39,229 board cards (2026-11-17) ever
+        # carried the "Likely Senior" estimate the reader found.
+        "level_hint": ({"level": hint_level, "basis": str(hint.get("basis") or "")[:200]}
+                       if hint_level else None),
     }
 
 
