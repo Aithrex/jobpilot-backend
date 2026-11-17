@@ -147,6 +147,11 @@ def params_of(payload: Dict[str, Any]) -> Dict[str, Any]:
             # Unset means keep unpriced rows (`inventory_feed.build_feed`).
             value = True if value is None else bool(value)
         out[key] = value
+    # The board is the whole market (2026-11-16): every country, remote or
+    # not, each card tagged, and the browser filters by place. So place and
+    # remote never make a different board, and a country change, or an older
+    # client still sending them, never misses the stored one.
+    out.update(location="", remote_only=False, us_only=True)
     return out
 
 

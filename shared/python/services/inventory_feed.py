@@ -71,6 +71,11 @@ MIN_ROWS = int(os.getenv("FEED_INVENTORY_MIN_ROWS", "25") or 25)
 # (ADR-001 keeps the strict 7-day gate for guests only).
 WINDOW_DAYS = int(os.getenv("FEED_INVENTORY_WINDOW_DAYS", "30") or 30)
 GLOBAL_KEEP = 1500
+#: The For-you board carries every country (2026-11-16): US cards exactly as
+#: before (capped at GLOBAL_KEEP), plus up to this many cards from elsewhere,
+#: tagged `geo_us: false`, so picking another country is a filter in the
+#: browser and never a new search. Kept apart so they never displace a US card.
+INTL_KEEP = int(os.getenv("FEED_INTL_KEEP", "400") or 400)
 
 #: Collapse (employer, title) across cities into one card. ON by default; the
 #: flag exists so a feed regression can be reverted from the console rather
@@ -1059,6 +1064,12 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     companies = [str(c).strip() for c in (payload.get("companies") or []) if str(c or "").strip()]
     us_only = bool(payload.get("us_only", True))
     remote_only = bool(payload.get("remote_only", False))
+    # The For-you board (its scans and the 30-minute rebuild both say so)
+    # carries every country, each card tagged `geo_us`; the client filters.
+    all_geos = str(payload.get("board") or "") == "for_you"
+    if all_geos:
+        # Remote-only is a filter in the browser too (`is_remote` on cards).
+        remote_only = False
     try:
         min_salary = float(payload.get("min_salary") or 0) or 0.0
     except (TypeError, ValueError):
@@ -1170,7 +1181,10 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         if id(doc) not in allowed_ids:
             policy_dropped += 1
             continue
-        if us_only and not us_geo.keep_us_row(row):
+        is_us = us_geo.keep_us_row(row)
+        if all_geos:
+            row["geo_us"] = bool(is_us)
+        elif us_only and not is_us:
             continue
         # Salary floor. Drops rows whose band is KNOWN and below the floor, and
         # keeps rows with no stated band. That asymmetry is deliberate: most
@@ -1225,7 +1239,7 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     # the policy: a warm slice the user's policy narrows is served short and
     # honest (`policy.excluded_counts`), never handed to the live crawl to
     # find more of what the user excluded.
-    if len(rows) + policy_dropped < MIN_ROWS:
+    if len([r for r in rows if r.get("geo_us", True)]) + policy_dropped < MIN_ROWS:
         logger.info("inventory_feed: %s slice too thin (%d < %d) - deferring to crawl",
                     source, len(rows) + policy_dropped, MIN_ROWS)
         return None
@@ -1266,7 +1280,10 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         -(j.get("match_score") or 0),
         -_tie_break(j),
         j.get("days_ago") if j.get("days_ago") is not None else 99))
-    rows = _cap_keeping_own_level(rows, user_email)
+    # US cards are capped exactly as before; the board's other countries are
+    # kept apart, best first, so they can never push a US card out.
+    rows = (_cap_keeping_own_level([r for r in rows if r.get("geo_us", True)], user_email)
+            + [r for r in rows if r.get("geo_us") is False][:INTL_KEEP])
 
     _attach_feasibility(rows, skills, resume_years)
     rows.sort(key=lambda j: (
@@ -1295,7 +1312,7 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         "generated_at": started.isoformat(),
         "jobs": rows,
         "total": len(rows),
-        "window_counts": _window_counts(rows),
+        "window_counts": _window_counts([r for r in rows if r.get("geo_us", True)]),
         "query_terms": titles,
         "tenants_total": _registry_size(source),
         # The crawl already covered the whole registry; there is no per-request

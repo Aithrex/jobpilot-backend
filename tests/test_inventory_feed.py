@@ -481,3 +481,37 @@ class TestUndatedPostings:
         doc = {"job_id": "j2", "title_raw": "X", "employer_name": "Y",
                "posted_at": None, "first_seen_at": None, "locations": []}
         assert feed._row_from_posting(doc, tz_offset=0) is None
+
+
+# ---------------------------------------------------------------------------
+# The For-you board carries every country (2026-11-16)
+# ---------------------------------------------------------------------------
+
+def test_the_board_carries_every_country_tagged_so_the_client_filters(db):
+    """Picking another country must be a filter, never a new search: the
+    board's build keeps non-US cards, tagged, and US cards are tagged too."""
+    _seed(30, tenant="usco", location="Austin, TX, USA")
+    _seed(12, tenant="inco", location="Bengaluru, Karnataka, India")
+    result = feed.build_feed("career-pages", _payload(board="for_you"))
+    us = [j for j in result["jobs"] if j.get("geo_us") is True]
+    abroad = [j for j in result["jobs"] if j.get("geo_us") is False]
+    assert len(us) == 30 and len(abroad) == 12
+    assert all("Bengaluru" in j["location"] for j in abroad)
+
+
+def test_other_countries_never_push_a_us_card_out(db, monkeypatch):
+    monkeypatch.setattr(feed, "GLOBAL_KEEP", 20)
+    monkeypatch.setattr(feed, "INTL_KEEP", 5)
+    _seed(30, tenant="usco", location="Austin, TX, USA")
+    _seed(12, tenant="inco", location="Bengaluru, Karnataka, India")
+    result = feed.build_feed("career-pages", _payload(board="for_you"))
+    assert sum(1 for j in result["jobs"] if j.get("geo_us") is True) == 20
+    assert sum(1 for j in result["jobs"] if j.get("geo_us") is False) == 5
+
+
+def test_other_surfaces_stay_us_only_and_untagged(db):
+    _seed(30, tenant="usco", location="Austin, TX, USA")
+    _seed(12, tenant="inco", location="Bengaluru, Karnataka, India")
+    result = feed.build_feed("career-pages", _payload())
+    assert all("geo_us" not in j for j in result["jobs"])
+    assert not any("Bengaluru" in j["location"] for j in result["jobs"])
