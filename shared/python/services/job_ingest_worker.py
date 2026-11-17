@@ -1834,6 +1834,7 @@ def reset_workday_gate() -> VendorGate:
     process restart does the same in production)."""
     global WORKDAY_GATE
     WORKDAY_COOKIES.clear()
+    WORKDAY_ROBOTS.clear()
     WORKDAY_GATE = VendorGate(
         "workday", interval=WORKDAY_INTERVAL, min_interval=WORKDAY_MIN_INTERVAL,
         max_interval=WORKDAY_MAX_INTERVAL, cooldown=WORKDAY_COOLDOWN_SECONDS,
@@ -1883,6 +1884,108 @@ class HostCookies:
 
 
 WORKDAY_COOKIES = HostCookies()
+
+
+class RobotsCache:
+    """Each host's robots.txt, fetched once a day and asked before every
+    request to that host (Workday, behind its bot wall, since 2026-11-17).
+
+    Our public crawler page says the crawler obeys robots.txt, and Cloudflare's
+    Verified Bots programme requires it, so it must be TRUE for every request,
+    not only when a careers source is first verified. Workday's robots.txt
+    allows `/<site>/` and does not mention `/wday/cxs/`, so today this costs one
+    request per tenant a day and refuses nothing - until an employer changes it.
+
+    Answers, the usual way crawlers read them: a 200 is parsed; 404/410 and
+    other 4xx mean "no rules"; a 429, a challenge, a 5xx or a network error mean
+    "cannot tell yet", and the request is NOT sent (asked again in 10 minutes).
+    Off when JOB_INGEST_WORKDAY_ROBOTS=0 (the test suite)."""
+
+    TTL_SECONDS = 24 * 3600
+    RETRY_SECONDS = 600
+    AGENT = "JobPilotIngest"
+
+    def __init__(self, clock: Callable[[], float] = time.time):
+        self._lock = threading.Lock()
+        self._host_locks: Dict[str, threading.Lock] = {}
+        self._entries: Dict[str, Tuple[Any, float]] = {}   # host -> (parser|"allow"|None, until)
+        self._clock = clock
+
+    @staticmethod
+    def enabled() -> bool:
+        return str(os.getenv("JOB_INGEST_WORKDAY_ROBOTS", "1")).strip() != "0"
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+    def allows(self, url: str, *, gate: Optional["VendorGate"], deadline: float,
+               stop: Optional[threading.Event] = None) -> bool:
+        if not self.enabled():
+            return True
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if not host:
+            return False
+        rules = self._rules(host, gate=gate, deadline=deadline, stop=stop)
+        if rules is None:
+            return False
+        if rules == "allow":
+            return True
+        path = parsed.path or "/"
+        if parsed.query:
+            path += "?" + parsed.query
+        return bool(rules.can_fetch(self.AGENT, path))
+
+    def _rules(self, host: str, *, gate, deadline, stop):
+        now = self._clock()
+        with self._lock:
+            hit = self._entries.get(host)
+            if hit and hit[1] > now:
+                return hit[0]
+            host_lock = self._host_locks.setdefault(host, threading.Lock())
+        with host_lock:                         # one fetch per host at a time
+            with self._lock:
+                hit = self._entries.get(host)
+                if hit and hit[1] > self._clock():
+                    return hit[0]
+            rules, ttl = self._fetch(host, gate=gate, deadline=deadline, stop=stop)
+            with self._lock:
+                self._entries[host] = (rules, self._clock() + ttl)
+            return rules
+
+    def _fetch(self, host: str, *, gate, deadline, stop):
+        import requests
+        from urllib.robotparser import RobotFileParser
+
+        if gate is not None and not gate.acquire(deadline=deadline, stop=stop):
+            return None, 0.0                    # no slot: ask again next request
+        url = f"https://{host}/robots.txt"
+        headers = {"User-Agent": _HTTP_HEADERS["User-Agent"], "Accept": "text/plain,*/*"}
+        headers.update(_web_bot_auth_headers(url))
+        try:
+            resp = requests.get(url, headers=headers, timeout=10,
+                                cookies=WORKDAY_COOKIES.jar(host))
+        except Exception:
+            return None, self.RETRY_SECONDS
+        WORKDAY_COOKIES.remember(host, resp)
+        if _is_challenge(resp):
+            if gate is not None:
+                gate.note_challenge()
+            return None, self.RETRY_SECONDS
+        code = getattr(resp, "status_code", 0)
+        if code == 200:
+            if gate is not None:
+                gate.note_ok()
+            parser = RobotFileParser()
+            parser.parse(str(getattr(resp, "text", "") or "").splitlines())
+            return parser, self.TTL_SECONDS
+        if 400 <= code < 500:
+            return "allow", self.TTL_SECONDS
+        return None, self.RETRY_SECONDS
+
+
+WORKDAY_ROBOTS = RobotsCache()
 
 
 def _vendor_gate_for(host: str) -> Optional[VendorGate]:
@@ -2014,6 +2117,12 @@ def http_get_json(source: str, url: str, policy: HostPolicy, *,
     attempts = max(1, int(RETRY_ATTEMPTS))
     for attempt in range(attempts):
         if (stop is not None and stop.is_set()) or time.monotonic() >= deadline:
+            return None
+        if gate is not None and not WORKDAY_ROBOTS.allows(url, gate=gate, deadline=deadline,
+                                                          stop=stop):
+            # robots.txt disallows it, or could not be read yet: not sent, and
+            # (like a gate refusal) never a miss against the posting.
+            gate.note_refused()
             return None
         if gate is not None and not gate.acquire(deadline=deadline, stop=stop):
             gate.note_refused()

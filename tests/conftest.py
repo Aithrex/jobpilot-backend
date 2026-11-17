@@ -14,6 +14,9 @@ from pathlib import Path
 # apart; tests drive it with fake clocks where they need it, never with sleeps.
 os.environ.setdefault("JOB_INGEST_WORKDAY_INTERVAL", "0")
 os.environ.setdefault("JOB_INGEST_WORKDAY_MIN_INTERVAL", "0")
+# ...and would fetch each Workday host's robots.txt first; tests that cover it
+# turn it on with monkeypatch.
+os.environ.setdefault("JOB_INGEST_WORKDAY_ROBOTS", "0")
 
 _HERE = Path(__file__).resolve().parent
 for _p in (str(_HERE.parent / "shared" / "python"), str(_HERE)):

@@ -219,7 +219,9 @@ every listing back to the employer's own page, where people apply.</p>
 <li>User-Agent contains <code>JobPilotIngest</code> and a link to this page.</li>
 <li>It reads only public job listings and job descriptions. It never signs in,
 never submits forms and never reads personal data.</li>
-<li>It obeys <code>robots.txt</code>.</li>
+<li>It obeys <code>robots.txt</code>: each site's file is read at least once a
+day, and a page it disallows is not requested. If the file cannot be read, the
+crawler waits and does not guess.</li>
 <li>It spaces its requests per vendor, stops for minutes when a site
 challenges or rate-limits it, and never retries into a challenge.</li>
 <li>Requests can carry an HTTP Message Signature (Web Bot Auth). The public
