@@ -1830,9 +1830,11 @@ WORKDAY_GATE = VendorGate(
 
 
 def reset_workday_gate() -> VendorGate:
-    """A fresh gate from the module settings (tests; a process restart does
-    the same in production)."""
+    """A fresh gate (and cookie jars) from the module settings (tests; a
+    process restart does the same in production)."""
     global WORKDAY_GATE
+    WORKDAY_COOKIES.clear()
+    WORKDAY_ROBOTS.clear()
     WORKDAY_GATE = VendorGate(
         "workday", interval=WORKDAY_INTERVAL, min_interval=WORKDAY_MIN_INTERVAL,
         max_interval=WORKDAY_MAX_INTERVAL, cooldown=WORKDAY_COOLDOWN_SECONDS,
@@ -1840,8 +1842,166 @@ def reset_workday_gate() -> VendorGate:
     return WORKDAY_GATE
 
 
+class HostCookies:
+    """One cookie jar per host, shared by every thread of the process.
+
+    Cloudflare's bot management sets `__cf_bm` (and similar) on its first
+    answer and expects a well-behaved client to send it back. `requests.post`
+    without a session drops every cookie, so each request arrived as a brand
+    new visitor. Keeping the jar is ordinary HTTP client behaviour: we send
+    back exactly what the site set, nothing forged. `http.cookiejar` takes its
+    own lock, and expired cookies are not sent."""
+
+    MAX_HOSTS = 5000
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._jars: Dict[str, Any] = {}
+
+    def jar(self, host: str):
+        from requests.cookies import RequestsCookieJar
+
+        with self._lock:
+            jar = self._jars.get(host)
+            if jar is None:
+                if len(self._jars) >= self.MAX_HOSTS:
+                    self._jars.clear()
+                jar = self._jars[host] = RequestsCookieJar()
+            return jar
+
+    def remember(self, host: str, resp: Any) -> None:
+        cookies = getattr(resp, "cookies", None)
+        if not cookies:
+            return
+        try:
+            self.jar(host).update(cookies)
+        except Exception:
+            pass
+
+    def clear(self) -> None:
+        with self._lock:
+            self._jars.clear()
+
+
+WORKDAY_COOKIES = HostCookies()
+
+
+class RobotsCache:
+    """Each host's robots.txt, fetched once a day and asked before every
+    request to that host (Workday, behind its bot wall, since 2026-11-17).
+
+    Our public crawler page says the crawler obeys robots.txt, and Cloudflare's
+    Verified Bots programme requires it, so it must be TRUE for every request,
+    not only when a careers source is first verified. Workday's robots.txt
+    allows `/<site>/` and does not mention `/wday/cxs/`, so today this costs one
+    request per tenant a day and refuses nothing - until an employer changes it.
+
+    Answers, the usual way crawlers read them: a 200 is parsed; 404/410 and
+    other 4xx mean "no rules"; a 429, a challenge, a 5xx or a network error mean
+    "cannot tell yet", and the request is NOT sent (asked again in 10 minutes).
+    Off when JOB_INGEST_WORKDAY_ROBOTS=0 (the test suite)."""
+
+    TTL_SECONDS = 24 * 3600
+    RETRY_SECONDS = 600
+    AGENT = "JobPilotIngest"
+
+    def __init__(self, clock: Callable[[], float] = time.time):
+        self._lock = threading.Lock()
+        self._host_locks: Dict[str, threading.Lock] = {}
+        self._entries: Dict[str, Tuple[Any, float]] = {}   # host -> (parser|"allow"|None, until)
+        self._clock = clock
+
+    @staticmethod
+    def enabled() -> bool:
+        return str(os.getenv("JOB_INGEST_WORKDAY_ROBOTS", "1")).strip() != "0"
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+    def allows(self, url: str, *, gate: Optional["VendorGate"], deadline: float,
+               stop: Optional[threading.Event] = None) -> bool:
+        if not self.enabled():
+            return True
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if not host:
+            return False
+        rules = self._rules(host, gate=gate, deadline=deadline, stop=stop)
+        if rules is None:
+            return False
+        if rules == "allow":
+            return True
+        path = parsed.path or "/"
+        if parsed.query:
+            path += "?" + parsed.query
+        return bool(rules.can_fetch(self.AGENT, path))
+
+    def _rules(self, host: str, *, gate, deadline, stop):
+        now = self._clock()
+        with self._lock:
+            hit = self._entries.get(host)
+            if hit and hit[1] > now:
+                return hit[0]
+            host_lock = self._host_locks.setdefault(host, threading.Lock())
+        with host_lock:                         # one fetch per host at a time
+            with self._lock:
+                hit = self._entries.get(host)
+                if hit and hit[1] > self._clock():
+                    return hit[0]
+            rules, ttl = self._fetch(host, gate=gate, deadline=deadline, stop=stop)
+            with self._lock:
+                self._entries[host] = (rules, self._clock() + ttl)
+            return rules
+
+    def _fetch(self, host: str, *, gate, deadline, stop):
+        import requests
+        from urllib.robotparser import RobotFileParser
+
+        if gate is not None and not gate.acquire(deadline=deadline, stop=stop):
+            return None, 0.0                    # no slot: ask again next request
+        url = f"https://{host}/robots.txt"
+        headers = {"User-Agent": _HTTP_HEADERS["User-Agent"], "Accept": "text/plain,*/*"}
+        headers.update(_web_bot_auth_headers(url))
+        try:
+            resp = requests.get(url, headers=headers, timeout=10,
+                                cookies=WORKDAY_COOKIES.jar(host))
+        except Exception:
+            return None, self.RETRY_SECONDS
+        WORKDAY_COOKIES.remember(host, resp)
+        if _is_challenge(resp):
+            if gate is not None:
+                gate.note_challenge()
+            return None, self.RETRY_SECONDS
+        code = getattr(resp, "status_code", 0)
+        if code == 200:
+            if gate is not None:
+                gate.note_ok()
+            parser = RobotFileParser()
+            parser.parse(str(getattr(resp, "text", "") or "").splitlines())
+            return parser, self.TTL_SECONDS
+        if 400 <= code < 500:
+            return "allow", self.TTL_SECONDS
+        return None, self.RETRY_SECONDS
+
+
+WORKDAY_ROBOTS = RobotsCache()
+
+
 def _vendor_gate_for(host: str) -> Optional[VendorGate]:
     return WORKDAY_GATE if str(host or "").endswith(".myworkdayjobs.com") else None
+
+
+def _web_bot_auth_headers(url: str) -> Dict[str, str]:
+    """Signature headers for `url`, or nothing (off, unconfigured, or the
+    signer failed - a request is never blocked on its signature)."""
+    try:
+        from services import web_bot_auth
+
+        return web_bot_auth.sign_request_headers(url) if web_bot_auth.should_sign(url) else {}
+    except Exception as exc:
+        logger.warning("ingest: web bot auth signing failed (%s)", type(exc).__name__)
+        return {}
 
 
 def _is_challenge(resp: Any) -> bool:
@@ -1958,6 +2118,12 @@ def http_get_json(source: str, url: str, policy: HostPolicy, *,
     for attempt in range(attempts):
         if (stop is not None and stop.is_set()) or time.monotonic() >= deadline:
             return None
+        if gate is not None and not WORKDAY_ROBOTS.allows(url, gate=gate, deadline=deadline,
+                                                          stop=stop):
+            # robots.txt disallows it, or could not be read yet: not sent, and
+            # (like a gate refusal) never a miss against the posting.
+            gate.note_refused()
+            return None
         if gate is not None and not gate.acquire(deadline=deadline, stop=stop):
             gate.note_refused()
             return None
@@ -1971,18 +2137,25 @@ def http_get_json(source: str, url: str, policy: HostPolicy, *,
             return None
         eff_timeout = max(0.5, min(float(timeout), remaining))
         headers = dict(_HTTP_HEADERS, **(extra_headers or {}))
+        send: Dict[str, Any] = {"headers": headers, "timeout": eff_timeout}
+        if gate is not None:
+            # Behind a bot wall: send back the cookies the site set, and sign
+            # the request once the owner has turned Web Bot Auth on.
+            send["cookies"] = WORKDAY_COOKIES.jar(host)
+            headers.update(_web_bot_auth_headers(url))
         try:
             if method == "POST":
-                resp = requests.post(url, json=json_body or {},
-                                     headers=headers, timeout=eff_timeout)
+                resp = requests.post(url, json=json_body or {}, **send)
             else:
-                resp = requests.get(url, headers=headers, timeout=eff_timeout)
+                resp = requests.get(url, **send)
         except Exception as exc:  # requests.RequestException and friends
             policy.note_failure(host)
             logger.debug("ingest %s: network error on %s (%s)", source, host,
                          type(exc).__name__)
         else:
             _note_http_status(resp.status_code)
+            if gate is not None:
+                WORKDAY_COOKIES.remember(host, resp)
             if gate is not None and _is_challenge(resp):
                 # Never retry into a bot wall: every retry deepens it.
                 gate.note_challenge()
@@ -2033,7 +2206,7 @@ GONE_CONFIRM_HOURS = _env_float("JOB_INGEST_GONE_CONFIRM_HOURS", 20.0)
 
 
 _HTTP_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; JobPilotIngest/1.0)",
+    "User-Agent": "Mozilla/5.0 (compatible; JobPilotIngest/1.1; +https://aspirely.me/bot)",
     "Accept": "application/json",
     "Content-Type": "application/json",
 }
@@ -2041,7 +2214,7 @@ _HTTP_HEADERS = {
 # A public apply page is HTML and often bot-sensitive, so the probe does not
 # claim to want JSON and does not send a JSON content type.
 _PROBE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; JobPilotIngest/1.0)",
+    "User-Agent": "Mozilla/5.0 (compatible; JobPilotIngest/1.1; +https://aspirely.me/bot)",
     "Accept": "text/html,application/xhtml+xml",
 }
 

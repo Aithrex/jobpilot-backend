@@ -35,7 +35,9 @@ from services.ats_providers.base import ChallengeError, CrawlPolicy, FetchContex
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_UA = "Mozilla/5.0 (compatible; JobPilotIngest/1.0; +https://jobpilot.ai/bot)"
+# The link must be a page WE serve (`web_bot_auth.INFO_PATH`): it was
+# jobpilot.ai, a domain we do not operate, until 2026-11-17.
+DEFAULT_UA = "Mozilla/5.0 (compatible; JobPilotIngest/1.1; +https://aspirely.me/bot)"
 
 # A vendor serving HTML must not be told we only accept JSON: several return 406
 # or a stripped page when the Accept header disagrees with what they render.
