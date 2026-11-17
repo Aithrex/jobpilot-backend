@@ -725,6 +725,33 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
      'host': 'careers.bcg.com',
      'display_name': 'Boston Consulting Group',
      'industry': 'consulting'},
+    # --- Workday employers' own career sites (2026-11-17) -------------------
+    # Cloudflare now challenges Workday from the box, so these employers' jobs
+    # stopped arriving. Each site below is linked from the employer's OWN
+    # homepage (the ownership chain) and serves the same requisitions as its
+    # Workday board. `tenant` is deliberately the employer's WORKDAY tenant and
+    # `requisition_ids` makes the posting id the Workday requisition number, so
+    # the feed's (tenant, requisition) key shows one card per job when both
+    # sources answer. (ENTERPRISE_CATALOG still leaves such fronts out of the
+    # interactive path; this is the background crawl.)
+    {'vendor': 'phenom', 'tenant': 'tjx', 'host': 'jobs.tjx.com',
+     'extra': {'requisition_ids': True},
+     'display_name': 'TJX Companies', 'industry': 'ecommerce_retail'},
+    {'vendor': 'phenom', 'tenant': 'globalhr', 'host': 'careers.rtx.com',
+     'extra': {'requisition_ids': True},
+     'display_name': 'RTX', 'industry': 'manufacturing_automotive'},
+    {'vendor': 'phenom', 'tenant': 'cvshealth', 'host': 'jobs.cvshealth.com',
+     'extra': {'requisition_ids': True},
+     'display_name': 'CVS Health', 'industry': 'ecommerce_retail'},
+    {'vendor': 'phenom', 'tenant': 'davita', 'host': 'careers.davita.com',
+     'extra': {'requisition_ids': True},
+     'display_name': 'DaVita', 'industry': 'healthtech'},
+    {'vendor': 'phenom', 'tenant': 'thermofisher', 'host': 'jobs.thermofisher.com',
+     'extra': {'requisition_ids': True},
+     'display_name': 'Thermo Fisher Scientific', 'industry': 'pharma'},
+    {'vendor': 'eightfold', 'tenant': 'ngc', 'host': 'jobs.northropgrumman.com',
+     'extra': {'domain': 'ngc.com', 'variant': 'pcsx', 'requisition_ids': True},
+     'display_name': 'Northrop Grumman', 'industry': 'manufacturing_automotive'},
     {'vendor': 'careers_page',
      'tenant': 'pydantic.dev',
      'host': 'pydantic.dev',

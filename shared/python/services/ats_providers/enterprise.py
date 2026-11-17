@@ -30,6 +30,8 @@ fail-closed guard.
 """
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import replace as _dc_replace
 from typing import Any, Dict, Iterator, List, Optional
 from urllib.parse import urlparse
@@ -92,7 +94,11 @@ class PhenomProvider(AtsProvider):
     vendor = "phenom"
     label = "Phenom"
     termless = True
-    has_detail = False
+    #: Since 2026-11-17. The listing carries only `descriptionTeaser` (a few
+    #: hundred characters), which scored every Phenom posting as having no
+    #: readable requirements. The job page (`/<region>/<lang>/job/<jobId>/...`)
+    #: embeds a schema.org JobPosting with the full body (TJX: 5,457 chars).
+    has_detail = True
     date_confidence = DATE_EXACT
     slug_probe = False
     policy = _ENTERPRISE_POLICY
@@ -118,6 +124,15 @@ class PhenomProvider(AtsProvider):
         "jobs.bechtel.com",
         # Official BCG careers page and public /widgets, checked 2026-11-05.
         "careers.bcg.com",
+        # Workday employers' OWN Phenom sites (2026-11-17). Each is linked from
+        # the employer's homepage and answers POST /widgets; they front the
+        # Workday boards Cloudflare now challenges from our box, and are read
+        # with `requisition_ids` so their cards merge with the Workday copies.
+        "jobs.tjx.com",
+        "careers.rtx.com",
+        "jobs.cvshealth.com",
+        "careers.davita.com",
+        "jobs.thermofisher.com",
         ".phenompeople.com",
     )
     portal_hosts = api_hosts
@@ -175,6 +190,13 @@ class PhenomProvider(AtsProvider):
             return
         size = int(self.policy.page_size)
         url = f"https://{host}/widgets"
+        # A Phenom site in front of the employer's ATS can report that ATS's
+        # requisition number (`reqId`) as the posting id instead of Phenom's
+        # `jobSeqNo`. With the endpoint's tenant set to the ATS tenant, the
+        # feed's (tenant, requisition) key then merges this copy with the ATS
+        # copy instead of showing the job twice. Off for existing boards: their
+        # stored ids are jobSeqNo and must not change under them.
+        req_ids = bool((endpoint.extra or {}).get("requisition_ids"))
         seen: set = set()
         overlap = False
         total: Optional[int] = None
@@ -224,7 +246,7 @@ class PhenomProvider(AtsProvider):
                 if ctx.should_stop():
                     ctx.listing_truncated = True
                     return
-                raw = self._to_raw(host, job)
+                raw = self._to_raw(host, job, req_ids=req_ids)
                 if raw is None or raw.source_job_id in seen:
                     overlap = True
                     # A row repeated across pages (the result set shifted
@@ -252,11 +274,16 @@ class PhenomProvider(AtsProvider):
         ctx.listing_truncated = True
 
     @staticmethod
-    def _to_raw(host: str, job: Dict[str, Any]) -> Optional[RawJob]:
+    def _to_raw(host: str, job: Dict[str, Any], *,
+                req_ids: bool = False) -> Optional[RawJob]:
         title = str(job.get("title") or "").strip()
-        rid = str(job.get("jobSeqNo") or job.get("jobId")
-                  or job.get("reqId") or "").strip()
-        if not rid or not title:
+        if req_ids:
+            rid = str(job.get("reqId") or job.get("jobId")
+                      or job.get("jobSeqNo") or "").strip()
+        else:
+            rid = str(job.get("jobSeqNo") or job.get("jobId")
+                      or job.get("reqId") or "").strip()
+        if not rid or not title or looks_like_test_posting(title):
             return None
         loc = str(job.get("cityState") or "").strip() or ", ".join(
             x for x in [job.get("city"), job.get("state")] if x)
@@ -268,6 +295,7 @@ class PhenomProvider(AtsProvider):
             source_job_id=rid,
             title=title,
             apply_url=apply_url,
+            detail_url=_phenom_job_page(host, job, title),
             location=loc,
             posted_at=posted,
             date_confidence=DATE_EXACT if posted else DATE_UNKNOWN,
@@ -276,6 +304,72 @@ class PhenomProvider(AtsProvider):
             employment_type=str(job.get("type") or job.get("jobType") or ""),
             remote=looks_remote(title, loc),
         )
+
+
+    def fetch_detail(self, endpoint: Endpoint, job: RawJob,
+                     ctx: FetchContext) -> Optional[RawJob]:
+        """The full body from the job page's schema.org JobPosting."""
+        url = job.detail_url
+        if not url or not url.lower().startswith("https://"):
+            return None
+        status, body = ctx.get_text(url, params={}, timeout=self.policy.detail_timeout,
+                                    vendor=self.vendor)
+        if self.policy.is_challenge(status, body or ""):
+            raise ChallengeError(self.vendor, status)
+        if status != 200 or not body:
+            return None
+        posting = job_posting_ld(body)
+        text = html_to_text(str((posting or {}).get("description") or ""))[:15000]
+        if not text:
+            return None
+        posted = to_iso((posting or {}).get("datePosted") or "")
+        return RawJob(source_job_id=job.source_job_id, title=job.title,
+                      apply_url=job.apply_url, description=text,
+                      posted_at=posted or job.posted_at,
+                      date_confidence=DATE_EXACT if (posted or job.posted_at) else DATE_UNKNOWN)
+
+
+def _phenom_job_page(host: str, job: Dict[str, Any], title: str) -> str:
+    """`https://<host>/<region>/<lang>/job/<jobId>/<slug>` - the page Phenom
+    itself links each search result to. `locale` is "en_GLOBAL" / "en_US"."""
+    job_id = str(job.get("jobId") or job.get("reqId") or "").strip()
+    if not host or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", job_id):
+        return ""
+    lang, _, region = str(job.get("locale") or "en_US").partition("_")
+    lang = lang.lower() if re.fullmatch(r"[A-Za-z]{2}", lang) else "en"
+    region = region.lower() if re.fullmatch(r"[A-Za-z]{2,8}", region) else "us"
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", title).strip("-")[:120] or "job"
+    return f"https://{host}/{region}/{lang}/job/{job_id}/{slug}"
+
+
+#: Placeholder rows some boards publish to test their own pipeline
+#: (jobs.thermofisher.com, 2026-11-17: "SA TEST OCT 15 1", "sourcing agent test
+#: oct 15"). Narrow on purpose: "Test Engineer" and "Test Technician" are jobs.
+_TEST_POSTING = re.compile(
+    r"^\s*(?:sa\s+|sourcing\s+agent\s+)?test(?:ing)?\s+(?:job|posting|req(?:uisition)?|"
+    r"jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b"
+    r"|^\s*(?:do\s+not\s+apply|dummy\s+(?:job|posting))\b",
+    re.I)
+
+
+def looks_like_test_posting(title: str) -> bool:
+    return bool(_TEST_POSTING.search(str(title or "")))
+
+
+def job_posting_ld(html: str) -> Optional[Dict[str, Any]]:
+    """The first schema.org JobPosting in a page's JSON-LD, or None."""
+    for m in re.finditer(r'<script[^>]*application/ld\+json[^>]*>(.*?)</script>',
+                         html or "", re.S | re.I):
+        try:
+            data = json.loads(m.group(1).strip())
+        except (ValueError, TypeError):
+            continue
+        items = data if isinstance(data, list) else (data.get("@graph") or [data]
+                                                     if isinstance(data, dict) else [])
+        for item in items:
+            if isinstance(item, dict) and item.get("@type") == "JobPosting":
+                return item
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +426,9 @@ class EightfoldProvider(AtsProvider):
         # From MNC_CATALOG, which the background crawl now loads. Verified
         # 2026-08-27: the pcsx search returns 710 US openings.
         "careers.qualcomm.com",
+        # Northrop Grumman's public search, linked from northropgrumman.com/
+        # careers (2026-11-17); PCSX with domain ngc.com, 3,709 postings.
+        "jobs.northropgrumman.com",
         ".eightfold.ai",
     )
     portal_hosts = api_hosts
@@ -411,7 +508,8 @@ class EightfoldProvider(AtsProvider):
             for job in positions:
                 if ctx.should_stop():
                     return
-                raw = self._to_raw(host, domain, job)
+                raw = self._to_raw(host, domain, job,
+                                   req_ids=bool(extra.get("requisition_ids")))
                 if raw is None or raw.source_job_id in seen:
                     overlap = True
                     continue
@@ -437,10 +535,17 @@ class EightfoldProvider(AtsProvider):
         return [r for r in rows if isinstance(r, dict)]
 
     @staticmethod
-    def _to_raw(host: str, domain: str, job: Dict[str, Any]) -> Optional[RawJob]:
+    def _to_raw(host: str, domain: str, job: Dict[str, Any], *,
+                req_ids: bool = False) -> Optional[RawJob]:
         title = str(job.get("name") or job.get("title") or "").strip()
-        rid = str(job.get("id") or "").strip()
-        if not rid or not title:
+        # Eightfold's own position id addresses the page and the detail API.
+        position_id = str(job.get("id") or "").strip()
+        # With `requisition_ids`, the posting id is the employer ATS's number
+        # (`atsJobId`, e.g. Northrop's Workday "R10261033"), so the card merges
+        # with that ATS's copy (see Phenom `requisition_ids`).
+        rid = (str(job.get("atsJobId") or job.get("displayJobId") or "").strip()
+               if req_ids else "") or position_id
+        if not rid or not position_id or not title:
             return None
         locs = job.get("locations") or (
             [job.get("location")] if job.get("location") else [])
@@ -450,7 +555,7 @@ class EightfoldProvider(AtsProvider):
         apply_url = str(job.get("canonicalPositionUrl") or "")
         if not apply_url:
             suffix = f"?domain={domain}" if domain else ""
-            apply_url = f"https://{host}/careers/job/{rid}{suffix}"
+            apply_url = f"https://{host}/careers/job/{position_id}{suffix}"
         return RawJob(
             source_job_id=rid,
             title=title,
@@ -459,7 +564,7 @@ class EightfoldProvider(AtsProvider):
             posted_at=posted,
             date_confidence=DATE_EXACT if posted else DATE_UNKNOWN,
             remote=looks_remote(title, loc),
-            detail_url=(f"https://{host}/api/apply/v2/jobs/{rid}"),
+            detail_url=(f"https://{host}/api/apply/v2/jobs/{position_id}"),
         )
 
     def fetch_detail(self, endpoint: Endpoint, job: RawJob,
@@ -475,10 +580,15 @@ class EightfoldProvider(AtsProvider):
         host = _host_of(endpoint)
         domain = str(extra.get("domain") or "")
         rid = job.source_job_id
-        if not host or not rid:
+        # The detail API is addressed by Eightfold's position id, which is the
+        # last segment of `detail_url` - not always the posting id (see
+        # `requisition_ids` in `_to_raw`).
+        m = re.search(r"/api/apply/v2/jobs/([A-Za-z0-9_-]+)", job.detail_url or "")
+        position_id = m.group(1) if m else rid
+        if not host or not position_id:
             return None
         params = {"domain": domain} if domain else {}
-        url = job.detail_url or f"https://{host}/api/apply/v2/jobs/{rid}"
+        url = job.detail_url or f"https://{host}/api/apply/v2/jobs/{position_id}"
         status, payload = ctx.get_json(
             url, params=params, timeout=self.policy.detail_timeout, vendor=self.vendor)
         if self.policy.is_challenge(status):
@@ -489,7 +599,7 @@ class EightfoldProvider(AtsProvider):
         if not body and pcsx:
             status, payload = ctx.get_json(
                 f"https://{host}/api/pcsx/position_details",
-                params=dict(params, position_id=rid, hl="en"),
+                params=dict(params, position_id=position_id, hl="en"),
                 timeout=self.policy.detail_timeout, vendor=self.vendor)
             if self.policy.is_challenge(status):
                 raise ChallengeError(self.vendor, status)
