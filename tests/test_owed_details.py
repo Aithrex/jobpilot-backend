@@ -584,3 +584,156 @@ class TestDetailFetchesArePacedPerRun:
         finally:
             mp.undo()
         assert captured["session"] is session
+
+
+class TestOurOwnPacingIsNeverAMiss:
+    """2026-11-17: the watchdog failed daily - 83.97% of new postings on
+    working boards had a body against 99%. Since 2026-11-05 one pacing session
+    serves every detail fetch of a run, and a request that session turned away
+    before sending it (no slot before the deadline, a breaker another posting
+    tripped) was written as a failed attempt on a NEW posting, pushing its next
+    try out an hour, then six, then a day."""
+
+    def _one_new_posting(self, board, monkeypatch, fake_detail, *, n=1):
+        rows = [_listing(board[0], f"NEW{i}", days_ago=0, description=TEASER) for i in range(n)]
+
+        def fake_list(member, **kw):
+            member["_listing_truncated"] = True
+            return [dict(r) for r in rows] if member["member_key"] == "co0" else []
+        monkeypatch.setattr(w, "list_member", fake_list)
+        monkeypatch.setattr(w, "fetch_detail", fake_detail)
+        return [r["source_job_id"] for r in rows]
+
+    def test_a_request_our_pacing_refused_defers_the_posting_without_a_miss(self, db, board, monkeypatch):
+        def refused(row, member, **kw):
+            kw["session"].note_refused()           # what `_request` does when it sends nothing
+            return str(row.get("description") or "")
+        sjid, = self._one_new_posting(board, monkeypatch, refused)
+        out = w.run_shard(w.SOURCE_WORKDAY, w.shard_of(w.SOURCE_WORKDAY, "co0"), now=NOW)
+        doc = _doc(sjid)
+        assert doc["body_state"] == "teaser"
+        assert not doc.get("detail_misses") and doc.get("detail_next_at") is None
+        assert out["counts"].get("detail-refused-by-pacing") == 1
+        assert out["counts"].get("detail-cut") == 1
+        stored = dict(doc, detail_next_at=doc.get("detail_next_at"))
+        assert w._owes_a_detail_fetch(stored, _listing(board[0], "NEW0", days_ago=0, description=TEASER),
+                                      board[0], now=NOW), "the next run asks again at once"
+
+    def test_a_site_that_answered_badly_is_still_a_miss(self, db, board, monkeypatch):
+        def failed(row, member, **kw):
+            w._note_http_status(503)
+            return str(row.get("description") or "")
+        sjid, = self._one_new_posting(board, monkeypatch, failed)
+        out = w.run_shard(w.SOURCE_WORKDAY, w.shard_of(w.SOURCE_WORKDAY, "co0"), now=NOW)
+        doc = _doc(sjid)
+        assert doc["detail_misses"] == 1
+        assert inv._safe_dt(doc["detail_next_at"]) == NOW + timedelta(hours=1)
+        assert not out["counts"].get("detail-refused-by-pacing")
+
+    def test_rows_past_what_a_key_can_serve_are_deferred_not_attempted(self, db, board, monkeypatch):
+        fetched = []
+
+        def ok(row, member, **kw):
+            fetched.append(row["source_job_id"])
+            w._note_http_status(200)
+            return BODY
+        sjids = self._one_new_posting(board, monkeypatch, ok, n=5)
+        # One request every 30 s: a 90 s run can serve two of the five.
+        monkeypatch.setattr(w, "_detail_pacing", lambda member: ("slow.example", 30.0, 1))
+        out = w.run_shard(w.SOURCE_WORKDAY, w.shard_of(w.SOURCE_WORKDAY, "co0"), now=NOW,
+                          budget_seconds=90)
+        assert len(fetched) == 2
+        assert out["counts"].get("detail-over-pace") == 3
+        states = sorted(_doc(s)["body_state"] for s in sjids)
+        assert states == ["full", "full", "teaser", "teaser", "teaser"]
+        for s in sjids:
+            assert not _doc(s).get("detail_misses"), "a deferral is not a miss"
+
+
+class TestPlanDetailFetches:
+    def _pairs(self, member_key, n, prefix):
+        m = {"member_key": member_key}
+        return [(m, {"source_job_id": f"{prefix}{i}"}) for i in range(n)]
+
+    def test_a_key_gets_what_it_can_serve_with_a_share_kept_for_the_backlog(self, monkeypatch):
+        monkeypatch.setattr(w, "_detail_pacing", lambda member: ("icims.com", 2.5, 1))
+        monkeypatch.setattr(w, "DETAIL_FETCH_SECONDS", 1.0)
+        new, old = self._pairs("a", 12, "N"), self._pairs("b", 5, "O")
+        ordered, new_over, old_over = w._plan_detail_fetches(new, old, seconds_left=25)
+        assert len(ordered) == 10                         # 25 s / 2.5 s
+        ids = [r["source_job_id"] for _m, r in ordered]
+        assert ids[:8] == [f"N{i}" for i in range(8)]     # newest new rows first
+        assert ids[8:] == ["O0", "O1"]                    # 20% kept for the backlog
+        assert [r["source_job_id"] for _m, r in new_over] == [f"N{i}" for i in range(8, 12)]
+        assert len(old_over) == 3
+
+    def test_keys_are_interleaved_so_workers_spread_over_sites(self, monkeypatch):
+        monkeypatch.setattr(w, "_detail_pacing",
+                            lambda member: (f"board:{member['member_key']}", 1.0, 1))
+        a, b = self._pairs("a", 3, "A"), self._pairs("b", 2, "B")
+        ordered, new_over, _ = w._plan_detail_fetches(a + b, [], seconds_left=100)
+        assert [r["source_job_id"] for _m, r in ordered] == ["A0", "B0", "A1", "B1", "A2"]
+        assert not new_over
+
+    def test_members_the_shared_session_does_not_pace_are_never_capped(self, monkeypatch):
+        monkeypatch.setattr(w, "_detail_pacing", lambda member: None)
+        rows = self._pairs("wd", 300, "W")
+        ordered, new_over, old_over = w._plan_detail_fetches(rows, [], seconds_left=1)
+        assert len(ordered) == 300 and not new_over and not old_over
+
+    def test_icims_tenants_share_one_key_and_own_sites_get_their_own(self):
+        icims = {"member_key": "icims:a", "source": w.SOURCE_ICIMS, "ats": "icims", "tenant": "a"}
+        pacing = w._detail_pacing(icims)
+        if pacing is not None:                           # registry importable
+            assert pacing[0] == "icims.com" and pacing[1] >= 2.0
+
+
+class TestPacedSessionRefusals:
+    def test_a_refused_acquire_books_no_slot(self):
+        import time as _t
+        from services.ats_providers.http import PacedSession
+        s = PacedSession()
+        now = _t.monotonic()
+        assert s.acquire("k", min_interval=10.0, jitter=0.0, deadline=now + 100)
+        booked = s._next_at["k"]
+        assert not s.acquire("k", min_interval=10.0, jitter=0.0, deadline=now + 5)
+        assert s._next_at["k"] == booked, "a refused caller used to push everyone back"
+
+    def test_refusals_are_counted_per_thread(self):
+        import threading
+        from services.ats_providers.http import PacedSession
+        s = PacedSession()
+        t = threading.Thread(target=s.note_refused)
+        t.start(); t.join()
+        assert s.refusals() == 0
+        s.note_refused()
+        assert s.refusals() == 1
+
+    def test_a_request_turned_away_before_sending_is_noted(self):
+        from services.ats_providers.http import PacedSession, make_fetchers
+
+        class NeverCalled:
+            def get(self, *a, **k):
+                raise AssertionError("a tripped key must not reach the site")
+        s = PacedSession()
+        s.tripped.add("jobs.example.com")
+        get_json, _gt, _pj = make_fetchers(s, requests_module=NeverCalled())
+        assert get_json("https://jobs.example.com/x") == (None, None)
+        assert s.refusals() == 1
+
+    def test_a_failure_after_a_request_was_sent_is_not_a_refusal(self):
+        from services.ats_providers.http import PacedSession, make_fetchers
+        s = PacedSession()
+
+        class Resp:
+            status_code = 503
+            text = ""
+
+        class TripsAfterSending:
+            def get(self, *a, **k):
+                s.tripped.add("jobs.example.com")     # the retry will be refused
+                return Resp()
+        get_json, _gt, _pj = make_fetchers(s, requests_module=TripsAfterSending(),
+                                           retries=2, retry_base=0.01)
+        assert get_json("https://jobs.example.com/x") == (None, None)
+        assert s.refusals() == 0, "the site failed; our queue was not the cause"
