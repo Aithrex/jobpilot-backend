@@ -749,6 +749,19 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
     {'vendor': 'phenom', 'tenant': 'thermofisher', 'host': 'jobs.thermofisher.com',
      'extra': {'requisition_ids': True},
      'display_name': 'Thermo Fisher Scientific', 'industry': 'pharma'},
+    # Second batch (2026-11-18). Ownership: careers.dollartree.com is under
+    # dollartree.com; abbott.com/careers.html links www.jobs.abbott;
+    # trinity-health.org/join-our-team links jobs.trinity-health.org. Each
+    # listing's reqId is the Workday requisition number (checked live).
+    {'vendor': 'phenom', 'tenant': 'dollartree', 'host': 'careers.dollartree.com',
+     'extra': {'requisition_ids': True},
+     'display_name': 'Dollar Tree', 'industry': 'ecommerce_retail'},
+    {'vendor': 'phenom', 'tenant': 'trinityhealth', 'host': 'jobs.trinity-health.org',
+     'extra': {'requisition_ids': True},
+     'display_name': 'Trinity Health', 'industry': 'healthtech'},
+    {'vendor': 'phenom', 'tenant': 'abbott', 'host': 'www.jobs.abbott',
+     'extra': {'requisition_ids': True},
+     'display_name': 'Abbott', 'industry': 'pharma'},
     {'vendor': 'eightfold', 'tenant': 'ngc', 'host': 'jobs.northropgrumman.com',
      'extra': {'domain': 'ngc.com', 'variant': 'pcsx', 'requisition_ids': True},
      'display_name': 'Northrop Grumman', 'industry': 'manufacturing_automotive'},
