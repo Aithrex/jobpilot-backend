@@ -61,6 +61,37 @@ its usual age window and US filter.
 `radancy_talentbrew` reads only partially (15 rows per page). Northrop's
 `ngc.eightfold.ai/careerhub` is the internal employee hub, not the public board.
 
+### Second batch (2026-11-18)
+
+The probe (`~/aithrex-probes/nov18/p5_sites.py`, paced 1.2 s, robots.txt
+obeyed) tried the likely careers hosts of 20 more top-40 employers.
+
+| Employer | Site | Provider | Ownership chain | Live check |
+|---|---|---|---|---|
+| Dollar Tree | careers.dollartree.com | Phenom | under dollartree.com | 18,537 listed; job page 9,015 chars |
+| Trinity Health | jobs.trinity-health.org | Phenom | trinity-health.org/join-our-team links it | 6,675 listed; job page 9,277 chars (short `/job/<id>` path) |
+| Abbott | www.jobs.abbott | Phenom | abbott.com and abbott.com/careers.html link it | 2,353 listed; job page 7,658 chars |
+
+Each listing's `reqId` is the Workday requisition number (Dollar Tree
+`R-015906`, Abbott `31166532`, Trinity `00098446`), and the Workday ids end in
+the same number, so the copies merge. Abbott's Workday ids are
+`workday-abbott-abbottcareers:<req>`; the key uses the stored tenant and the
+last segment, so this still merges (pinned in the tests).
+
+**Not added:**
+
+| Employer | Why |
+|---|---|
+| Johnson & Johnson, Verizon, Wells Fargo | careers site answers 403: a wall |
+| Citi (jobs.citi.com), Sysco (careers.sysco.com) | Radancy TalentBrew, read only partially |
+| Cleveland Clinic, TD, Labcorp, Sanford | Symphony Talent job pages that link to Workday: a new reader would be needed |
+| Nordstrom, Mass General Brigham, Fresenius, Meijer | careers page links straight to Workday |
+| Fifth Third, Tapestry, JLL | nothing readable found, or the host did not answer |
+
+Dollar Tree (18,537) and CVS (18,929) list more than the 60 pages x 200 rows
+the Phenom reader reads, in relevance order, so some fresh rows can be missed.
+The listing is then marked truncated, so nothing is closed for it.
+
 ## How duplicates stay one card
 
 These sites serve the same requisitions as the employer's Workday board.

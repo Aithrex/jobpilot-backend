@@ -135,7 +135,10 @@ class TestEightfoldRequisitionIds:
 
 SEEDS = {"jobs.tjx.com": "tjx", "careers.rtx.com": "globalhr", "jobs.cvshealth.com": "cvshealth",
          "careers.davita.com": "davita", "jobs.thermofisher.com": "thermofisher",
-         "jobs.northropgrumman.com": "ngc"}
+         "jobs.northropgrumman.com": "ngc",
+         # Second batch, 2026-11-18.
+         "careers.dollartree.com": "dollartree", "jobs.trinity-health.org": "trinityhealth",
+         "www.jobs.abbott": "abbott"}
 
 
 class TestSeedsAndAllowlist:
@@ -170,6 +173,19 @@ class TestOneCardPerJob:
         out = feed._dedupe([r for r in rows if r])
         assert len(out) == 1
         assert out[0].get("duplicate_count") == 1
+
+    def test_a_workday_member_key_with_the_site_name_still_merges(self):
+        # Abbott's Workday ids are `workday-abbott-abbottcareers:<req>`, not
+        # `abbott:<req>`; the key uses the stored tenant and the last segment.
+        now = datetime.now(timezone.utc)
+        wd = _doc("workday", "abbott", "workday-abbott-abbottcareers", "31166532",
+                  "https://abbott.wd5.myworkdayjobs.com/abbottcareers/job/Chandler/Diabetes-Sales-Associate_31166532-1",
+                  now - timedelta(days=3))
+        ph = _doc("phenom", "abbott", "phenom-abbott", "31166532",
+                  "https://www.jobs.abbott/us/en/job/31166532/Diabetes-Sales-Associate-Chandler-AZ",
+                  now - timedelta(days=1))
+        out = feed._dedupe([feed._row_from_posting(d, tz_offset=0) for d in (wd, ph)])
+        assert len(out) == 1
 
     def test_a_different_requisition_is_not_merged(self):
         now = datetime.now(timezone.utc)

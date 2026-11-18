@@ -140,6 +140,11 @@ class PhenomProvider(AtsProvider):
         "jobs.cvshealth.com",
         "careers.davita.com",
         "jobs.thermofisher.com",
+        # Second batch (2026-11-18), same ownership rule: careers.dollartree.com
+        # is under dollartree.com; abbott.com and trinity-health.org link theirs.
+        "careers.dollartree.com",
+        "jobs.trinity-health.org",
+        "www.jobs.abbott",
         ".phenompeople.com",
     )
     portal_hosts = api_hosts
