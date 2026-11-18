@@ -322,13 +322,21 @@ class PhenomProvider(AtsProvider):
         url = job.detail_url
         if not url or not url.lower().startswith("https://"):
             return None
-        status, body = ctx.get_text(url, params={}, timeout=self.policy.detail_timeout,
-                                    vendor=self.vendor)
-        if self.policy.is_challenge(status, body or ""):
-            raise ChallengeError(self.vendor, status)
-        if status != 200 or not body:
-            return None
-        posting = job_posting_ld(body)
+        posting = None
+        # Phenom sites disagree on the job-page path: TJX and CVS serve
+        # `/<region>/<lang>/job/<id>/<slug>`, DaVita only `/job/<id>`
+        # (2026-11-17: the first form is a 404 there). A 404 on the first form
+        # is therefore not "this job is gone"; the short form is asked next.
+        for candidate in _phenom_page_candidates(url):
+            status, body = ctx.get_text(candidate, params={},
+                                        timeout=self.policy.detail_timeout,
+                                        vendor=self.vendor)
+            if self.policy.is_challenge(status, body or ""):
+                raise ChallengeError(self.vendor, status)
+            if status == 200 and body:
+                posting = job_posting_ld(body)
+                if posting:
+                    break
         text = html_to_text(str((posting or {}).get("description") or ""))[:15000]
         if not text:
             return None
@@ -337,6 +345,17 @@ class PhenomProvider(AtsProvider):
                       apply_url=job.apply_url, description=text,
                       posted_at=posted or job.posted_at,
                       date_confidence=DATE_EXACT if (posted or job.posted_at) else DATE_UNKNOWN)
+
+
+def _phenom_page_candidates(url: str) -> List[str]:
+    """The stored job-page URL, then the same job at `/job/<id>` on its host."""
+    out = [url]
+    m = re.match(r"(https://[^/]+)/(?:[a-z]{2,8}/[a-z]{2}/)?job/([A-Za-z0-9_.-]+)", url)
+    if m:
+        short = f"{m.group(1)}/job/{m.group(2)}"
+        if short != url:
+            out.append(short)
+    return out
 
 
 def _phenom_job_page(host: str, job: Dict[str, Any], title: str) -> str:
