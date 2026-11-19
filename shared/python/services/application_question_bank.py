@@ -296,6 +296,24 @@ FIELDS: List[Dict[str, Any]] = [
         r"(?:provide|complete|sign|file) .*(?:letter|documentation|submission|"
         r"paperwork) .*(?:school|government agency|dso)"],
        options=["Yes", "No"], default_policy=POLICY_NEVER_DEFAULT),
+    # The FUTURE half of sponsorship (ApplyPilot BR-1). Sponsorship is three
+    # separately declared facts: authorized now, needs sponsorship now, needs
+    # it in the future (an F-1 OPT student is "no" now and "yes" later). The id
+    # is identical to the extension's so a declared answer syncs through
+    # `PUT /api/apply/onboarding/answers`.
+    #
+    # It sits AFTER `requires_sponsorship` on purpose: matching walks catalog
+    # order within work_auth, so every label `requires_sponsorship` matched
+    # before ("…now or in the future require sponsorship?") still matches it.
+    # Server-side classification is unchanged; the id exists to be declared.
+    # REQUIRED_ONBOARDING like the extension's copy, and NOT in
+    # READY_REQUIRED_FIELDS, so no finished onboarding becomes unready.
+    _f("requires_sponsorship_future", "Will you require visa sponsorship in the future?",
+       CAT_WORK_AUTH, SENS_LEGAL, VT_BOOLEAN, "radio",
+       aliases=[r"require .*sponsor.*future", r"future .*sponsor",
+                r"need sponsorship .*in the future", r"at any point .*require .*sponsor"],
+       negations=[r"not .*require .*sponsor.*future", r"without .*future .*sponsor"],
+       default_policy=POLICY_REQUIRED_ONBOARDING),
 
     # ================= EEO (protected, decline_default) =================
     _f("gender", "Gender", CAT_EEO, SENS_PROTECTED, VT_SELECT, "select",
@@ -580,6 +598,18 @@ FIELDS: List[Dict[str, Any]] = [
         r"licen[cs]es? (?:and ?/?or |and |or )?certificates?",
         r"what certificates?", r"do you (?:hold|have) any certificat"],
        default_policy=POLICY_FROM_PROFILE),
+    # ApplyPilot BR-3 / BR-4. The extension reaches these through an ATS
+    # adapter's field map (Workday's per-job "Location" in an experience card;
+    # the skills pill box), and its copies carry no aliases. Here every field
+    # needs at least one, so each gets ANCHORED phrasings that can only mean
+    # this field: a bare "Location" or "Preferred work location" never reaches
+    # `work_location`, and "Skills" alone (an exact label) is the skills box.
+    _f("work_location", "Work location", CAT_SCREENING, SENS_SAFE, VT_TEXT, "text",
+       [r"^(?:employer|company) location$", r"^location of (?:this |the )?(?:employer|employment|job|position)$",
+        r"^work experience location$"]),
+    _f("skills", "Skills", CAT_SCREENING, SENS_SAFE, VT_TEXT, "text",
+       [r"^skills?$", r"^(?:your |key |technical |relevant )?skills(?: \(.*\))?$",
+        r"^list (?:your |any )?(?:key |technical |relevant )?skills$"]),
     _f("current_company", "Current company", CAT_SCREENING, SENS_SAFE, VT_TEXT, "text",
        [r"current (?:company|employer)", r"present employer", r"who .*currently work for",
         r"^company$", r"^company\*?$",

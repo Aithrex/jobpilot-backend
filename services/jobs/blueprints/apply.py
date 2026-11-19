@@ -241,6 +241,20 @@ def generate_answer():
     role = InputSanitizer.sanitize_string(data.get("role", "") or "", max_length=200)
     tone = InputSanitizer.sanitize_string(data.get("tone", "professional") or "professional", max_length=40)
 
+    # BR-2 (ApplyPilot extension): optional client facts. With them, every
+    # variant carries the `used_fact_ids` the extension's integrity check
+    # verifies, and a variant citing anything else is dropped server-side.
+    # Validated BEFORE any charge: a malformed request spends nothing.
+    from services.answer_citations import FactsError, parse_facts
+    try:
+        facts = parse_facts(data.get("facts"), InputSanitizer.sanitize_string)
+    except FactsError as e:
+        return jsonify({"error": "invalid_facts", "message": str(e)}), 400
+    try:
+        n_variants = max(1, min(int(data.get("n_variants") or 3), 3))
+    except (TypeError, ValueError):
+        n_variants = 3
+
     try:
         user_email = get_jwt_identity()
 
@@ -260,8 +274,10 @@ def generate_answer():
         from services.answer_generator import AnswerGenerator
 
         svc = get_resume_service()
-        base_resume = svc.get_base_resume(user_email=user_email)
-        if not base_resume or not base_resume.get("structured"):
+        # Cited mode grounds in the client's facts (the user's own profile), so
+        # a parsed base résumé is not required for it.
+        base_resume = None if facts else svc.get_base_resume(user_email=user_email)
+        if not facts and (not base_resume or not base_resume.get("structured")):
             return jsonify({
                 "error": "no_resume",
                 "message": "Upload and parse a base resume on the portfolio first so "
@@ -275,9 +291,19 @@ def generate_answer():
             company=company,
             role=role,
             tone=tone,
+            n_variants=n_variants,
+            facts=facts,
         )
         if not variants:
+            if facts:
+                # Every draft failed the citation check (or the model failed):
+                # the extension routes the question to its Needs-you queue.
+                return jsonify({"error": "no_grounded_answer",
+                                "message": "No answer could be grounded in your facts."}), 502
             return jsonify({"error": "Failed to generate an answer. Please try again."}), 502
+        # Old clients get the same shape plus an empty citation list.
+        for v in variants:
+            v.setdefault("used_fact_ids", [])
 
         # Log to per-company answer history for later reuse — soft-fail so a
         # history write never breaks the user-facing generation.
@@ -294,7 +320,8 @@ def generate_answer():
         except Exception as e:
             logger.info("apply/answer: history write soft-fail: %s", e)
 
-        return jsonify({"variants": variants, "usage": usage}), 200
+        return jsonify({"variants": variants, "usage": usage,
+                        "grounding": "client_facts" if facts else "resume"}), 200
     except Exception as e:
         logger.exception("apply/answer error: %s", e)
         return jsonify({"error": "Failed to generate answer. Please try again."}), 500
