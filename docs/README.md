@@ -26,6 +26,10 @@ The [Gmail tracker contract](specs/gmail-tracker-contract.md) records the
 2026-10-25 matching, review, scan-continuation, and slim-history pagination
 changes, including the 60-day initial scan scope and retained OAuth controls.
 
+[Extension AI answers](specs/extension-ai-answers.md) is the cited
+`POST /api/apply/answer` contract the ApplyPilot extension uses for store
+users: client facts in, `used_fact_ids` out, uncited drafts dropped.
+
 ## decisions/ — the ADRs
 
 `ADR-000` predates the numbering and keeps its `000` because it was written
