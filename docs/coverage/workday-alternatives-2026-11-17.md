@@ -123,3 +123,21 @@ full body. This also fills descriptions for the Phenom boards already crawled
   Workday employers. Discovery and ownership proof need it.
 - **NLx ownership.** The 7 `.jobs` employers need proof (a link from the
   employer's site or two independent signals) before `BOARDS` can list them.
+
+## 4. Browser Radar (2026-11-19)
+
+A fourth source, for Workday itself: the owner's own browser reads Workday
+boards at a person's pace through the ApplyPilot extension and sends what it
+saw to `POST /api/jobs/browser-radar/listings`. The server maps the raw CXS
+fields with the crawler's own `WorkdayProvider` and writes them through
+`upsert_posting` / `touch_seen`, so the rows are the crawl's rows. It never
+closes a posting, and a posting the browser saw stops counting as "not seen".
+
+It covers a sliver, not the outage: one browser makes at most ~400 Workday
+requests a day (about 8,000 listing rows), against the ~3M fetched a day
+before 2026-11-14. Its plan sends the browser to the user's own For-you
+Workday employers first, then (for contributors) the largest boards the
+crawler has not reached for 12 hours. Contract, switches and ops:
+[`docs/specs/browser-radar.md`](../specs/browser-radar.md). Writes are on by
+default for contributor accounts (`BROWSER_RADAR_INGEST=dry_run` or `off` to
+stop them).
