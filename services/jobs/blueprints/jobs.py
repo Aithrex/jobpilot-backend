@@ -828,6 +828,60 @@ def workday_search():
 
 
 # ------------------------------------------------------------------
+# Browser Radar (`radar-1`, docs/specs/browser-radar.md) — Workday listings
+# read by the owner's own browser (the ApplyPilot extension) while the
+# crawler's box is behind Workday's bot wall. The plan is read-only; the
+# listings endpoint writes through the crawler's own path, on by default
+# for contributors (`BROWSER_RADAR_INGEST` = on | dry_run | off). Business
+# refusals are 403/409/429/400 — never 401, which the frontend treats as a
+# dead session.
+# ------------------------------------------------------------------
+
+@jobs_bp.route("/browser-radar/plan", methods=["GET"])
+@jwt_required()
+def browser_radar_plan():
+    """Which Workday boards this account's browser should read, and how fast."""
+    user_email = get_jwt_identity()
+    try:
+        limit = int(request.args.get("limit", 40))
+    except (TypeError, ValueError):
+        limit = 40
+    try:
+        from services import browser_radar_service as radar
+        return jsonify(radar.build_plan(user_email, limit=limit)), 200
+    except Exception as e:
+        logger.error(f"Browser radar plan error: {type(e).__name__}: {e}")
+        return jsonify({"error": "Failed to build the radar plan"}), 500
+
+
+@jobs_bp.route("/browser-radar/listings", methods=["POST"])
+@jwt_required()
+def browser_radar_listings():
+    """One batch of Workday listings the browser saw (contract section 2)."""
+    from services import browser_radar_service as radar
+
+    raw = request.get_data(cache=True) or b""
+    if (request.content_length or 0) > radar.MAX_BODY_BYTES or len(raw) > radar.MAX_BODY_BYTES:
+        return jsonify({"error": "invalid_batch",
+                        "message": "The batch is over 2 MB."}), 400
+    data = request.get_json(silent=True)
+    user_email = get_jwt_identity()
+    try:
+        return jsonify(radar.ingest_batch(user_email, data)), 200
+    except radar.RadarError as e:
+        body = {"error": e.code, "message": e.message}
+        if e.retry_after is not None:
+            body["retry_after_seconds"] = int(e.retry_after)
+        resp = jsonify(body)
+        if e.retry_after is not None:
+            resp.headers["Retry-After"] = str(int(e.retry_after))
+        return resp, e.status
+    except Exception as e:
+        logger.error(f"Browser radar ingest error: {type(e).__name__}: {e}")
+        return jsonify({"error": "Failed to record the listings"}), 500
+
+
+# ------------------------------------------------------------------
 # Career Pages tab — direct fan-out across companies' OWN career sites
 # (Greenhouse/Lever/Ashby/SmartRecruiters/Workable/Recruitee public JSON
 # APIs — the non-Workday universe). Same async submit/poll pattern.
