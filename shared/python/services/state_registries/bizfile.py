@@ -88,12 +88,12 @@ class BizfileAdapter(StateAdapter):
         session = self._session
         if session is None:
             import requests
-            session = requests.Session()
+            from services.web_bot_auth import BotSession
+            session = BotSession()
             self._session = session
         headers = {"Accept": "application/json",
                    "Content-Type": "application/json",
-                   "Referer": f"https://{self.host}/",
-                   "User-Agent": "JobPilot/1.0 (+company registry ingest)"}
+                   "Referer": f"https://{self.host}/"}
         response = session.post(self.source_url, json={"SEARCH_VALUE": term},
                                 headers=headers, timeout=30)
         status = int(getattr(response, "status_code", 0) or 0)

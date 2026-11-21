@@ -148,7 +148,8 @@ class DirectEmployersNLXProvider(AtsProvider):
             cache[origin] = body if status == 200 else ''
         robots = RobotFileParser()
         robots.parse((cache[origin] or '').splitlines())
-        if not robots.can_fetch('JobPilotIngest', url):
+        from services import web_bot_auth
+        if not web_bot_auth.robots_allows(robots, url):
             raise ChallengeError(self.vendor, detail='robots prohibits ' + url)
         return not ctx.should_stop()
 

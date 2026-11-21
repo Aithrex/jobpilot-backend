@@ -23,6 +23,8 @@ import tempfile
 import zipfile
 from typing import Any, Dict, Iterator, Optional
 
+from services.web_bot_auth import bot_headers as _bot_headers
+
 from .base import METHOD_BULK, CompanyRecord, StateAdapter
 
 logger = logging.getLogger(__name__)
@@ -65,7 +67,7 @@ class BulkFileAdapter(StateAdapter):
         os.close(fd)
         total = 0
         with requests.get(self.source_url, stream=True, timeout=_TIMEOUT,
-                          headers={"User-Agent": "JobPilot/1.0 (+employer-coverage)"}
+                          headers=_bot_headers(self.source_url)
                           ) as resp:
             resp.raise_for_status()
             with open(path, "wb") as fh:

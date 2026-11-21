@@ -84,13 +84,16 @@ CACHE_COLLECTION = "career_pages_cache"
 CACHE_TTL_SECONDS = 6 * 3600
 CACHE_FRESH_SECONDS = 3 * 3600
 
+# The crawler's own name; it claimed to be Chrome 126 until 2026-11-20. The
+# session sets it, and the Web Bot Auth signature, on every request it sends.
+from services.web_bot_auth import USER_AGENT as _BOT_UA, BotSession as _BotSession  # noqa: E402
+
 _HEADERS = {
-    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"),
+    "User-Agent": _BOT_UA,
     "Accept": "application/json",
 }
 
-_SESSION = requests.Session()
+_SESSION = _BotSession()
 _SESSION.headers.update(_HEADERS)
 try:
     from requests.adapters import HTTPAdapter

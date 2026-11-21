@@ -30,6 +30,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import requests
 
+from services import web_bot_auth
+
 from utils.config import _get_config_value
 
 logger = logging.getLogger(__name__)
@@ -201,15 +203,11 @@ def _load_tenants() -> List[TenantSpec]:
 
 
 _HEADERS = {
-    # Workday CXS rejects requests with no Accept/Content-Type or with a
-    # python-requests UA on some clusters. Pretend to be a modern browser.
+    # Workday CXS rejects requests with no Accept/Content-Type. The crawler
+    # names itself (Aspirely Bot); until 2026-11-20 this claimed to be Chrome.
     "Accept": "application/json,application/xml",
     "Content-Type": "application/json",
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 12_0) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0 Safari/537.36"
-    ),
+    "User-Agent": web_bot_auth.USER_AGENT,
 }
 
 # Process-lifetime cache: (tenant, host) → resolved working site path. The
@@ -300,7 +298,8 @@ def _resolve_site(
         url = f"{cxs_base(tenant, host, domain)}/wday/cxs/{tenant}/{site}/jobs"
         body = {"searchText": "", "locations": [], "appliedFacets": {}, "limit": 1, "offset": 0}
         try:
-            resp = requests.post(url, json=body, headers=_HEADERS, timeout=timeout)
+            resp = requests.post(url, json=body, headers=web_bot_auth.bot_headers(url, _HEADERS),
+                                 timeout=timeout)
         except requests.RequestException as e:
             logger.debug("Workday CXS %s/%s/%s probe network error: %s", tenant, host, site, e)
             continue
@@ -349,7 +348,8 @@ def _fetch_tenant(
         "offset": 0,
     }
     try:
-        resp = requests.post(url, json=body, headers=_HEADERS, timeout=timeout)
+        resp = requests.post(url, json=body, headers=web_bot_auth.bot_headers(url, _HEADERS),
+                                 timeout=timeout)
     except requests.RequestException as e:
         logger.debug("Workday CXS %s: network error %s", tenant, e)
         return []
@@ -543,7 +543,8 @@ def _fetch_one_detail(
 ) -> Tuple[str, str]:
     url = f"{cxs_base(tenant, host, domain)}/wday/cxs/{tenant}/{site}/{path}"
     try:
-        resp = requests.get(url, headers=_HEADERS, timeout=timeout)
+        resp = requests.get(url, headers=web_bot_auth.bot_headers(url, _HEADERS),
+                            timeout=timeout)
         if not resp.ok:
             return apply_url, ""
         data = resp.json()

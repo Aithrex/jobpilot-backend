@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"
 HTTP_TIMEOUT = 12
-UA = "JobPilot/1.0 (+https://jobpilot.app) learning-verifier"
+from services.web_bot_auth import USER_AGENT as UA  # noqa: E402
 README_MAX_CHARS = 6000
 PATCH_MAX_CHARS = 8000
 PAGE_MAX_CHARS = 6000

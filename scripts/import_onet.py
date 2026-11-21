@@ -85,8 +85,9 @@ NOISE_PREFIXES: Tuple[str, ...] = (
 
 def _fetch(url: str) -> str:
     import requests
+    from services.web_bot_auth import bot_headers as _bot_headers
     resp = requests.get(url, timeout=120,
-                        headers={"User-Agent": "JobPilotIngest/1.0"})
+                        headers=_bot_headers(url))
     resp.raise_for_status()
     return resp.text
 

@@ -45,10 +45,11 @@ logger = logging.getLogger(__name__)
 from services.daily_pipeline_service import _html_to_text  # noqa: E402
 
 _TIMEOUT_S = 12
-_UA = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-)
+# The crawler's own name, never a browser's: `web_bot_auth.bot_headers` sets it
+# (and the signature) on every hop below. This used to claim to be Chrome 119.
+from services import web_bot_auth  # noqa: E402
+
+_UA = web_bot_auth.USER_AGENT
 _MAX_JD_CHARS = 6000
 
 
@@ -211,7 +212,7 @@ def _pinned_request(method: str, url: str, ip: str, *, timeout: float,
     host_header = f"[{host}]" if ":" in host else host
     if parsed.port and parsed.port != (443 if scheme == "https" else 80):
         host_header += f":{parsed.port}"
-    hdrs = dict(headers or {})
+    hdrs = web_bot_auth.bot_headers(url, headers)
     hdrs["Host"] = host_header
     tmo = urllib3.Timeout(connect=timeout, read=timeout)
     if scheme == "https":
@@ -257,7 +258,9 @@ def _safe_get(url: str, *, timeout: int = _TIMEOUT_S, headers: Optional[dict] = 
     """
     return _follow_safely(
         url,
-        lambda u, _ip: requests.get(u, timeout=timeout, headers=headers, allow_redirects=False),
+        lambda u, _ip: requests.get(u, timeout=timeout,
+                                    headers=web_bot_auth.bot_headers(u, headers),
+                                    allow_redirects=False),
     )
 
 
@@ -559,10 +562,9 @@ def _fetch_apify_fallback(url: str) -> str:
 
 
 def _fetch_generic_html(url: str) -> str:
-    # Full set of browser-like headers — many ATSes 403 a bare requests.get
-    # without Accept/Accept-Language/Sec-Fetch-* even though they'd serve the
-    # page to a real Chrome. Mimicking the standard Chrome request raises the
-    # success rate from ~40% to ~75% on company-careers pages.
+    # Ordinary content negotiation, and nothing that imitates a browser: the
+    # Sec-Fetch-* set and a Chrome User-Agent were removed 2026-11-20. We say
+    # who we are (Aspirely Bot) and a site that refuses bots is refused.
     headers = {
         "User-Agent": _UA,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -570,11 +572,6 @@ def _fetch_generic_html(url: str) -> str:
         "Accept-Encoding": "gzip, deflate, br",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Upgrade-Insecure-Requests": "1",
     }
     try:
         # _safe_get = SSRF guard + manual redirect follow with per-hop

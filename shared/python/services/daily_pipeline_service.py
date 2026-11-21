@@ -27,6 +27,8 @@ from urllib.parse import quote
 
 import requests
 
+from services.web_bot_auth import bot_headers as _bot_headers
+
 from utils.config import _get_config_value
 from utils.datadog_metrics import dd_metric
 
@@ -752,7 +754,7 @@ def _fetch_greenhouse(slug: str, display: str, title_filter=None) -> List[Dict[s
     tf = title_filter or _default_title_filter
     url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
     try:
-        r = requests.get(url, timeout=12)
+        r = requests.get(url, timeout=12, headers=_bot_headers(url))
         if not r.ok:
             return []
         items = (r.json() or {}).get("jobs") or []
@@ -787,7 +789,7 @@ def _fetch_lever(slug: str, display: str, title_filter=None) -> List[Dict[str, A
     tf = title_filter or _default_title_filter
     url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
     try:
-        r = requests.get(url, timeout=10)
+        r = requests.get(url, timeout=10, headers=_bot_headers(url))
         if not r.ok:
             return []
         items = r.json() or []
@@ -844,7 +846,7 @@ def _fetch_ashby(slug: str, display: str, title_filter=None) -> List[Dict[str, A
     tf = title_filter or _default_title_filter
     url = f"https://api.ashbyhq.com/posting-api/job-board/{slug}"
     try:
-        r = requests.get(url, timeout=10)
+        r = requests.get(url, timeout=10, headers=_bot_headers(url))
         if not r.ok:
             return []
         items = (r.json() or {}).get("jobs") or []

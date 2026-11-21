@@ -1,4 +1,5 @@
-"""Web Bot Auth signing and the Workday cookie jar (2026-11-17).
+"""Web Bot Auth signing and the Workday cookie jar (2026-11-17), and the one
+bot name Cloudflare's review asked for (2026-11-20).
 
 Workday's job sites sit behind Cloudflare bot management. The legitimate way
 for a crawler to be recognised is Cloudflare's Verified Bots programme: sign
@@ -35,7 +36,6 @@ def configured(monkeypatch):
     monkeypatch.setenv("WEB_BOT_AUTH_KEY", base64.b64encode(base64.urlsafe_b64decode(RFC_D + "=")).decode())
     monkeypatch.setenv("WEB_BOT_AUTH_AGENT", "https://aspirely.me")
     monkeypatch.setenv("WEB_BOT_AUTH_SIGN", "1")
-    monkeypatch.delenv("WEB_BOT_AUTH_HOSTS", raising=False)
     yield
 
 
@@ -100,11 +100,158 @@ class TestRequestSignature:
         monkeypatch.setenv("WEB_BOT_AUTH_SIGN", "0")
         assert not wba.should_sign("https://acme.wd5.myworkdayjobs.com/x")
 
-    def test_only_listed_hosts_are_signed(self, configured):
-        assert wba.should_sign("https://acme.wd5.myworkdayjobs.com/x")
-        assert wba.should_sign("https://crawltest.com/cdn-cgi/web-bot-auth")
-        assert not wba.should_sign("https://boards-api.greenhouse.io/v1/boards/x")
-        assert not wba.should_sign("https://evilmyworkdayjobs.com/x")
+    def test_every_host_is_signed_once_signing_is_on(self, configured, monkeypatch):
+        """Cloudflare's review (2026-11-19): Web Bot Auth is our only
+        verification method, so EVERY request must carry the signature. A host
+        list leaves the rest unattributable, and the old setting is ignored."""
+        monkeypatch.setenv("WEB_BOT_AUTH_HOSTS", ".myworkdayjobs.com")
+        for url in ("https://acme.wd5.myworkdayjobs.com/x",
+                    "https://crawltest.com/cdn-cgi/web-bot-auth",
+                    "https://boards-api.greenhouse.io/v1/boards/x",
+                    "https://careers.dollartree.com/widgets",
+                    "http://example.org/robots.txt"):
+            assert wba.should_sign(url), url
+        assert not wba.should_sign("ftp://example.org/x")
+        assert not wba.should_sign("not a url")
+
+
+class TestOneName:
+    """The bot is submitted as "Aspirely Bot"; its token must match."""
+
+    def test_the_user_agent_names_aspirely_bot_and_links_the_page(self):
+        assert wba.BOT_TOKEN == "AspirelyBot"
+        assert "AspirelyBot/" in wba.USER_AGENT
+        assert wba.USER_AGENT.endswith("+https://aspirely.me/bot)")
+        assert "JobPilot" not in wba.USER_AGENT
+
+    def test_every_crawler_path_uses_it(self):
+        from services import career_pages_service, jd_fetcher, tenant_discovery, workday_cxs_fetcher
+        from services.ats_providers import http as provider_http
+        assert w._HTTP_HEADERS["User-Agent"] == wba.USER_AGENT
+        assert w._PROBE_HEADERS["User-Agent"] == wba.USER_AGENT
+        assert provider_http.DEFAULT_UA == wba.USER_AGENT
+        assert workday_cxs_fetcher._HEADERS["User-Agent"] == wba.USER_AGENT
+        assert career_pages_service._HEADERS["User-Agent"] == wba.USER_AGENT
+        assert jd_fetcher._UA == wba.USER_AGENT
+        assert tenant_discovery.USER_AGENT == wba.USER_AGENT
+
+    def test_no_crawler_module_claims_to_be_a_browser_or_the_old_name(self):
+        import pathlib
+        root = pathlib.Path(wba.__file__).resolve().parent
+        offenders = []
+        for f in sorted(root.rglob("*.py")):
+            if f.name in ("web_bot_auth.py", "browser_executor.py"):
+                continue    # the auto-apply browser is a real browser, off in prod
+            text = f.read_text(encoding="utf-8")
+            for bad in ("Chrome/1", "Safari/537", "JobPilotIngest/", "JobPilotBot/",
+                        "jobpilot.app)", "Sec-Fetch-Mode"):
+                if bad in text:
+                    offenders.append(f"{f.name}: {bad}")
+        assert offenders == []
+
+    def test_bot_headers_replace_the_agent_and_any_stale_signature(self, configured):
+        h = wba.bot_headers("https://example.org/a", {
+            "user-agent": "Mozilla/5.0 Chrome/126", "Accept": "text/html",
+            "Signature": "sig1=:old:", "signature-input": "old"})
+        assert h["User-Agent"] == wba.USER_AGENT and h["Accept"] == "text/html"
+        assert "user-agent" not in h and "signature-input" not in h
+        assert h["Signature"] != "sig1=:old:"
+        params = h["Signature-Input"][len("sig1="):]
+        _verify(_rfc_key(), '"@authority": example.org\n"signature-agent": "https://aspirely.me"\n'
+                f'"@signature-params": {params}', h["Signature"])
+
+    def test_bot_headers_without_signing_still_name_the_bot(self, monkeypatch):
+        monkeypatch.setenv("WEB_BOT_AUTH_SIGN", "0")
+        assert wba.bot_headers("https://example.org/") == {"User-Agent": wba.USER_AGENT}
+
+    def test_robots_rules_for_the_old_name_are_still_obeyed(self):
+        from urllib.robotparser import RobotFileParser
+        for text in ("User-agent: JobPilotIngest\nDisallow: /\n",
+                     "User-agent: AspirelyBot\nDisallow: /\n"):
+            parser = RobotFileParser()
+            parser.parse(text.splitlines())
+            assert not wba.robots_allows(parser, "https://example.org/jobs")
+        parser = RobotFileParser()
+        parser.parse("User-agent: SomeoneElse\nDisallow: /\n".splitlines())
+        assert wba.robots_allows(parser, "https://example.org/jobs")
+
+
+class TestBotSessionSignsEveryHop:
+    def test_each_redirect_hop_is_signed_for_its_own_host(self, configured):
+        import requests
+        from requests.adapters import BaseAdapter
+
+        seen = []
+
+        class Fake(BaseAdapter):
+            def send(self, request, **kw):
+                seen.append((request.url, dict(request.headers)))
+                resp = requests.Response()
+                resp.request, resp.url = request, request.url
+                if len(seen) == 1:
+                    resp.status_code = 302
+                    resp.headers["Location"] = "https://jobs.example.net/board"
+                else:
+                    resp.status_code = 200
+                    resp._content = b"ok"
+                return resp
+
+            def close(self):
+                pass
+
+        s = wba.BotSession()
+        s.mount("https://", Fake())
+        r = s.get("https://www.example.com/careers",
+                  headers={"User-Agent": "Mozilla/5.0 Chrome/126"})
+        assert r.status_code == 200 and len(seen) == 2
+        for (url, headers), authority in zip(seen, ("www.example.com", "jobs.example.net")):
+            assert headers["User-Agent"] == wba.USER_AGENT
+            params = headers["Signature-Input"][len("sig1="):]
+            _verify(_rfc_key(), f'"@authority": {authority}\n'
+                    '"signature-agent": "https://aspirely.me"\n'
+                    f'"@signature-params": {params}', headers["Signature"])
+
+
+class TestBotPage:
+    """Cloudflare's review asked the page (which loads without JavaScript) to
+    name the operating company with its jurisdiction and number, and to say
+    every request is signed, not that requests "can" be."""
+
+    def _page(self):
+        return wba.info_page()
+
+    def test_it_names_the_bot_and_its_token(self):
+        page = self._page()
+        assert "<h1>Aspirely Bot</h1>" in page and "<code>AspirelyBot</code>" in page
+        assert "<script" not in page.lower()
+
+    def test_signed_crawler_says_every_request(self, configured):
+        page = self._page()
+        assert "Every request it sends carries Web Bot Auth signature headers" in page
+        assert " can carry" not in page
+
+    def test_unsigned_crawler_does_not_claim_it(self, configured, monkeypatch):
+        monkeypatch.setenv("WEB_BOT_AUTH_SIGN", "0")
+        page = self._page()
+        assert "Every request" not in page and "not switched on yet" in page
+
+    def test_operator_appears_only_when_all_three_facts_are_set(self, monkeypatch):
+        for k in ("OPERATOR", "OPERATOR_JURISDICTION", "OPERATOR_NUMBER", "OPERATOR_ADDRESS"):
+            monkeypatch.delenv("WEB_BOT_AUTH_" + k, raising=False)
+        monkeypatch.setenv("WEB_BOT_AUTH_OPERATOR", "Example Labs Private Limited")
+        assert "operated by" not in self._page()
+        monkeypatch.setenv("WEB_BOT_AUTH_OPERATOR_JURISDICTION", "Telangana, India")
+        monkeypatch.setenv("WEB_BOT_AUTH_OPERATOR_NUMBER", "U12345TG2026PTC000001")
+        page = self._page()
+        assert ("Aspirely Bot is operated by <strong>Example Labs Private Limited</strong>, "
+                "a company registered in Telangana, India, company number "
+                "U12345TG2026PTC000001.") in page
+
+    def test_operator_text_is_escaped(self, monkeypatch):
+        monkeypatch.setenv("WEB_BOT_AUTH_OPERATOR", "<b>A & B</b>")
+        monkeypatch.setenv("WEB_BOT_AUTH_OPERATOR_JURISDICTION", "X")
+        monkeypatch.setenv("WEB_BOT_AUTH_OPERATOR_NUMBER", "1")
+        assert "&lt;b&gt;A &amp; B&lt;/b&gt;" in self._page()
 
 
 class TestKeyDirectory:
@@ -172,14 +319,16 @@ class TestCrawlerSendsCookiesAndSignatures:
         assert {"Signature", "Signature-Input", "Signature-Agent"} <= set(h)
         assert "aspirely.me/bot" in h["User-Agent"]
 
-    def test_other_vendors_get_no_cookie_jar_and_no_signature(self, configured, monkeypatch):
+    def test_other_vendors_get_no_cookie_jar_but_are_signed(self, configured, monkeypatch):
         import requests
         sent = []
         monkeypatch.setattr(requests, "get", lambda url, **kw: sent.append(kw) or SimpleNamespace(
             status_code=200, headers={}, json=lambda: {"ok": 1}))
         w.http_get_json("career-pages", "https://boards-api.greenhouse.io/v1/boards/acme/jobs",
                         w.HostPolicy(), deadline=1e12)
-        assert "cookies" not in sent[0] and "Signature" not in sent[0]["headers"]
+        assert "cookies" not in sent[0]
+        assert {"Signature", "Signature-Input", "Signature-Agent"} <= set(sent[0]["headers"])
+        assert sent[0]["headers"]["User-Agent"] == wba.USER_AGENT
 
     def test_a_signer_failure_never_blocks_the_request(self, configured, monkeypatch):
         sent = self._capture(monkeypatch)

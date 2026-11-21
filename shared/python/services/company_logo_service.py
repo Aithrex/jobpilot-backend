@@ -127,11 +127,12 @@ ACCEPTED_CONTENT_TYPES = {
 _ICO_MAGIC = (b"\x00\x00\x01\x00", b"\x00\x00\x02\x00")
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
+# The crawler's own name (`jd_fetcher._safe_get` also sets it and the
+# signature on every hop). It claimed to be Chrome 126 until 2026-11-20.
+from services.web_bot_auth import USER_AGENT as _BOT_UA  # noqa: E402
+
 _HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/126 Safari/537.36"
-    ),
+    "User-Agent": _BOT_UA,
     "Accept": "image/avif,image/webp,image/png,image/*;q=0.8,*/*;q=0.5",
 }
 

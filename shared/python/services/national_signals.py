@@ -22,10 +22,14 @@ import logging
 import os
 from typing import Any, Dict, Iterable, Iterator, List, Optional
 
+from services import web_bot_auth as _wba  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 EDGAR_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
-EDGAR_UA = "JobPilot/1.0 (employer-coverage; contact via site)"
+# SEC asks for a declared name and a contact address in the User-Agent.
+EDGAR_UA = (f"Aspirely Bot ({_wba.BOT_TOKEN}/{_wba.BOT_VERSION}; +{_wba.info_url()}) "
+            f"{os.getenv('WEB_BOT_AUTH_CONTACT') or 'harshith@aithrex.tech'}")
 
 _LCA_NAME_COLS = ("EMPLOYER_NAME", "LCA_CASE_EMPLOYER_NAME",
                   "EMPLOYER_BUSINESS_DBA")
