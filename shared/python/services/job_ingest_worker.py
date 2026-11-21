@@ -126,6 +126,7 @@ from typing import (Any, Callable, Dict, Iterable, List, Optional, Sequence,
 from urllib.parse import urlparse
 
 from services import job_inventory_service as inv
+from services import web_bot_auth
 
 logger = logging.getLogger(__name__)
 
@@ -1943,7 +1944,7 @@ class RobotsCache:
 
     TTL_SECONDS = 24 * 3600
     RETRY_SECONDS = 600
-    AGENT = "JobPilotIngest"
+    AGENT = web_bot_auth.BOT_TOKEN
 
     def __init__(self, clock: Callable[[], float] = time.time):
         self._lock = threading.Lock()
@@ -1975,7 +1976,7 @@ class RobotsCache:
         path = parsed.path or "/"
         if parsed.query:
             path += "?" + parsed.query
-        return bool(rules.can_fetch(self.AGENT, path))
+        return web_bot_auth.robots_allows(rules, path)
 
     def _rules(self, host: str, *, gate, deadline, stop):
         now = self._clock()
@@ -2001,8 +2002,7 @@ class RobotsCache:
         if gate is not None and not gate.acquire(deadline=deadline, stop=stop):
             return None, 0.0                    # no slot: ask again next request
         url = f"https://{host}/robots.txt"
-        headers = {"User-Agent": _HTTP_HEADERS["User-Agent"], "Accept": "text/plain,*/*"}
-        headers.update(_web_bot_auth_headers(url))
+        headers = web_bot_auth.bot_headers(url, {"Accept": "text/plain,*/*"})
         try:
             resp = requests.get(url, headers=headers, timeout=10,
                                 cookies=WORKDAY_COOKIES.jar(host))
@@ -2036,8 +2036,6 @@ def _web_bot_auth_headers(url: str) -> Dict[str, str]:
     """Signature headers for `url`, or nothing (off, unconfigured, or the
     signer failed - a request is never blocked on its signature)."""
     try:
-        from services import web_bot_auth
-
         return web_bot_auth.sign_request_headers(url) if web_bot_auth.should_sign(url) else {}
     except Exception as exc:
         logger.warning("ingest: web bot auth signing failed (%s)", type(exc).__name__)
@@ -2176,13 +2174,15 @@ def http_get_json(source: str, url: str, policy: HostPolicy, *,
         if remaining <= 0.5:
             return None
         eff_timeout = max(0.5, min(float(timeout), remaining))
+        # Every request names the crawler and, once Web Bot Auth is on, is
+        # signed, whatever the host: Cloudflare's review asked for "every
+        # request", not the ones behind a wall we know about.
         headers = dict(_HTTP_HEADERS, **(extra_headers or {}))
+        headers.update(_web_bot_auth_headers(url))
         send: Dict[str, Any] = {"headers": headers, "timeout": eff_timeout}
         if gate is not None:
-            # Behind a bot wall: send back the cookies the site set, and sign
-            # the request once the owner has turned Web Bot Auth on.
+            # Behind a bot wall: send back the cookies the site set.
             send["cookies"] = WORKDAY_COOKIES.jar(host)
-            headers.update(_web_bot_auth_headers(url))
         try:
             if method == "POST":
                 resp = requests.post(url, json=json_body or {}, **send)
@@ -2246,7 +2246,7 @@ GONE_CONFIRM_HOURS = _env_float("JOB_INGEST_GONE_CONFIRM_HOURS", 20.0)
 
 
 _HTTP_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; JobPilotIngest/1.1; +https://aspirely.me/bot)",
+    "User-Agent": web_bot_auth.USER_AGENT,
     "Accept": "application/json",
     "Content-Type": "application/json",
 }
@@ -2254,7 +2254,7 @@ _HTTP_HEADERS = {
 # A public apply page is HTML and often bot-sensitive, so the probe does not
 # claim to want JSON and does not send a JSON content type.
 _PROBE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; JobPilotIngest/1.1; +https://aspirely.me/bot)",
+    "User-Agent": web_bot_auth.USER_AGENT,
     "Accept": "text/html,application/xhtml+xml",
 }
 

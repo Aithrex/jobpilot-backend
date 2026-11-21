@@ -28,7 +28,7 @@ from utils.db_connect import DBConnect
 logger = logging.getLogger(__name__)
 
 HTTP_TIMEOUT = 15
-UA = "JobPilot/1.0 (+https://jobpilot.app) events-aggregator"
+from services.web_bot_auth import USER_AGENT as UA, bot_headers as _bot_headers  # noqa: E402
 
 TRUSTED_SOURCES = {"devpost", "mlh", "unstop", "hackerearth", "confstech"}
 SUSPICIOUS_PHRASES = [
@@ -214,7 +214,8 @@ def scrape_devpost(limit: int = 40) -> List[Dict]:
         resp = requests.get(
             "https://devpost.com/api/hackathons",
             params={"order_by": "deadline", "status[]": "open"},
-            headers={"User-Agent": UA, "Accept": "application/json"},
+            headers=_bot_headers("https://devpost.com/api/hackathons",
+                                 {"Accept": "application/json"}),
             timeout=HTTP_TIMEOUT,
         )
         if resp.status_code != 200:
@@ -277,7 +278,7 @@ def scrape_confstech(limit: int = 40) -> List[Dict]:
         try:
             resp = requests.get(
                 f"{base}/{y}/{t}.json",
-                headers={"User-Agent": UA, "Accept": "application/json"},
+                headers=_bot_headers(f"{base}/{y}/{t}.json", {"Accept": "application/json"}),
                 timeout=10,
             )
             return (t, resp.json() or []) if resp.status_code == 200 else (t, [])

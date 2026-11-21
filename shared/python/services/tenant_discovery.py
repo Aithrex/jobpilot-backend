@@ -56,8 +56,9 @@ logger = logging.getLogger(__name__)
 
 # A polite, identifiable agent. Both services below are public research
 # archives; both ask that clients identify themselves and back off on 5xx.
-USER_AGENT = ("JobPilotBot/1.0 (+https://aspirely.me; employer discovery; "
-              "contact: support@aspirely.me)")
+from services import web_bot_auth  # noqa: E402
+
+USER_AGENT = web_bot_auth.USER_AGENT
 
 _CC_COLLINFO = "https://index.commoncrawl.org/collinfo.json"
 _CC_INDEX = "https://index.commoncrawl.org/{index}-index"
@@ -133,7 +134,7 @@ def _get(url: str, *, timeout: float = 90.0, attempts: int = 4,
     """
     last = ""
     for attempt in range(attempts):
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        req = urllib.request.Request(url, headers=web_bot_auth.bot_headers(url))
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.read()

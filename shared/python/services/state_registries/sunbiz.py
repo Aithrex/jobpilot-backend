@@ -97,12 +97,11 @@ class SunbizDailyAdapter(StateAdapter):
         session = self._session
         if session is None:
             import requests
-            session = requests.Session()
+            from services.web_bot_auth import BotSession
+            session = BotSession()
             self._session = session
         url = self.file_url(day)
-        response = session.get(url, auth=SUNBIZ_PUBLIC_AUTH,
-                               headers={"User-Agent": "JobPilot/1.0"},
-                               timeout=60)
+        response = session.get(url, auth=SUNBIZ_PUBLIC_AUTH, timeout=60)
         status = int(getattr(response, "status_code", 0) or 0)
         if status == 404:
             return None

@@ -50,6 +50,12 @@ from urllib.parse import urljoin, urlparse
 logger = logging.getLogger(__name__)
 
 from services import career_source_service as css  # noqa: E402
+
+
+def _bot_headers(url: str) -> Dict[str, str]:
+    from services import web_bot_auth
+    return web_bot_auth.bot_headers(url)
+
 from services.career_source_service import evidence  # noqa: E402
 
 OWNERSHIP_VERSION = "career-source-ownership-1.0.0"
@@ -156,7 +162,7 @@ class RobotsGate:
     standard says an absent file means) and CLOSED on an explicit Disallow.
     """
 
-    def __init__(self, user_agent: str = "JobPilotIngest") -> None:
+    def __init__(self, user_agent: str = "") -> None:
         self.user_agent = user_agent
         self._cache: Dict[str, Any] = {}
 
@@ -173,7 +179,8 @@ class RobotsGate:
         if parser is False:
             return True
         try:
-            return bool(parser.can_fetch(self.user_agent, url))
+            from services import web_bot_auth
+            return web_bot_auth.robots_allows(parser, url)
         except Exception:
             return True
 
@@ -185,7 +192,7 @@ class RobotsGate:
         try:
             import requests
             resp = requests.get(origin + "/robots.txt", timeout=6.0,
-                                headers={"User-Agent": self.user_agent})
+                                headers=_bot_headers(origin + "/robots.txt"))
             if resp.status_code != 200:
                 return False
             parser = RobotFileParser()
@@ -211,10 +218,11 @@ class Fetcher:
     """
 
     def __init__(self, *, robots: Optional[RobotsGate] = None,
-                 min_interval: float = 0.4, user_agent: str = "JobPilotIngest",
+                 min_interval: float = 0.4, user_agent: str = "",
                  enable_browser: bool = False) -> None:
         self.robots = robots or RobotsGate(user_agent)
         self.user_agent = user_agent
+        self._http = None
         self.min_interval = float(min_interval)
         self.enable_browser = bool(enable_browser)
         self._next_at: Dict[str, float] = {}
@@ -255,10 +263,14 @@ class Fetcher:
         self._pace(urlparse(url).netloc.lower())
         self.fetches += 1
         try:
-            resp = requests.get(
+            # A BotSession signs each redirect hop for ITS host; this walk
+            # follows redirects by design (domain -> careers page -> board).
+            if self._http is None:
+                from services import web_bot_auth
+                self._http = web_bot_auth.BotSession()
+            resp = self._http.get(
                 url, timeout=FETCH_TIMEOUT, allow_redirects=True,
-                headers={"User-Agent": self.user_agent,
-                         "Accept": "text/html,application/xhtml+xml,"
+                headers={"Accept": "text/html,application/xhtml+xml,"
                                    "application/xml;q=0.9,*/*;q=0.8",
                          "Accept-Language": "en-US,en;q=0.9"},
                 stream=True)

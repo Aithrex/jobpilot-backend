@@ -212,6 +212,34 @@ its copy is `D:\jobpilot-aws-backup\secrets\oracle-generated.json`.
 Atlas accepts only the box and the owner's home IP, so a new IP has to be added
 to the Atlas access list.
 
+## Crawler identity (Aspirely Bot, Web Bot Auth)
+
+Every request the crawler sends names it: `User-Agent: Mozilla/5.0
+(compatible; AspirelyBot/1.2; +https://aspirely.me/bot)`
+(`shared/python/services/web_bot_auth.py`). The gateway serves `/bot`, a page
+with no JavaScript, and the key directory at
+`/.well-known/http-message-signatures-directory`. Cloudflare's Verified Bots
+review reads both.
+
+Three processes send crawler traffic: ingest-runner, the worker and the API.
+They read the same settings from two files, `/etc/jobpilot/ingest-runner.env`
+and `/etc/jobpilot/stack.env`. Keep the two files identical for these names:
+
+| Name | Meaning |
+|---|---|
+| `WEB_BOT_AUTH_KEY` | Ed25519 private key (`scripts/web_bot_auth_keygen.py`). Never print it |
+| `WEB_BOT_AUTH_AGENT` | `https://aspirely.me` |
+| `WEB_BOT_AUTH_CONTACT` | the address on `/bot` |
+| `WEB_BOT_AUTH_SIGN` | `1` signs EVERY request, whatever the host. The page states "every request" only when this is on |
+| `WEB_BOT_AUTH_OPERATOR` | legal name of the operating company |
+| `WEB_BOT_AUTH_OPERATOR_JURISDICTION` | where it is registered |
+| `WEB_BOT_AUTH_OPERATOR_NUMBER` | its company registration number |
+| `WEB_BOT_AUTH_OPERATOR_ADDRESS` | registered address (optional) |
+
+The page names the operator only when all three operator values are set.
+After editing, restart ingest-runner (`sudo systemctl restart ingest-runner`)
+and recreate the containers with a deploy.
+
 ## Moving to another provider
 
 Copy `/mnt/jobpilot-data/s3` and `/etc/jobpilot`, install Docker, check out this
