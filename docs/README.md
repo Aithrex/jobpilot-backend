@@ -30,6 +30,11 @@ changes, including the 60-day initial scan scope and retained OAuth controls.
 `POST /api/apply/answer` contract the ApplyPilot extension uses for store
 users: client facts in, `used_fact_ids` out, uncited drafts dropped.
 
+[Browser Radar](specs/browser-radar.md) is the `radar-1` contract: Workday
+listings the owner's own browser reads while the crawler's box is behind
+Workday's bot wall, written through the crawler's own path, on by default for
+contributor accounts.
+
 ## decisions/ — the ADRs
 
 `ADR-000` predates the numbering and keeps its `000` because it was written
