@@ -14,7 +14,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "evals"))
 
-from eval_tech_feed_retrieval import CORPUS, run, run_ordering, seed_corpus  # noqa: E402
+from eval_tech_feed_retrieval import CORPUS, NOW as EVAL_NOW, run, run_ordering, seed_corpus  # noqa: E402
 
 from services import employer_display            # noqa: E402
 from services import job_content_store as store   # noqa: E402
@@ -31,6 +31,13 @@ COLLECTIONS = ("job_postings", "tech_feed_searches", "job_source_state",
 @pytest.fixture()
 def clean_db(monkeypatch):
     monkeypatch.delenv("RESUME_S3_BUCKET", raising=False)
+    # The corpus is dated from the eval's fixed clock (2026-09-01). Reading it
+    # against the wall clock aged every posting out of its retention window
+    # ~85 days later, and recall fell from 1.0 to 0.43 with no code change
+    # (main went red between 2026-11-21 and 2026-11-26). Both services read
+    # time through `_now()`, so the eval pins it to its own clock.
+    monkeypatch.setattr(tfs, "_now", lambda: EVAL_NOW)
+    monkeypatch.setattr(inv, "_now", lambda: EVAL_NOW)
     store.reset_caches()
     # The canonical-name cache is PROCESS-global; a warm entry from another
     # test would pin an answer for a database that looks nothing like this one.
