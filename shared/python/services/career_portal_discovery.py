@@ -90,7 +90,7 @@ class RobotsCache:
     that does not answer has not refused; a site that says no has.
     """
 
-    def __init__(self, ctx: FetchContext, user_agent: str = "JobPilotIngest"):
+    def __init__(self, ctx: FetchContext, user_agent: str = ""):
         self._ctx = ctx
         self._ua = user_agent
         self._cache: Dict[str, Any] = {}
@@ -108,7 +108,8 @@ class RobotsCache:
         if parser is False:
             return True          # no robots.txt / unreadable -> allowed
         try:
-            return bool(parser.can_fetch(self._ua, url))
+            from services import web_bot_auth
+            return web_bot_auth.robots_allows(parser, url)
         except Exception:
             return True
 

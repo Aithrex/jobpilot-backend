@@ -34,8 +34,7 @@ import requests  # noqa: E402
 from services import employer_business_model as ebm  # noqa: E402
 from services import experience_view, fit_score, resume_access  # noqa: E402
 
-UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+from services.web_bot_auth import USER_AGENT as UA  # noqa: E402
 CLOSED_RX = re.compile(
     r"(this (?:position|job|role|posting|requisition) (?:is|has been) (?:closed|filled|no longer "
     r"(?:available|open|active|accepting))|no longer (?:accepting|taking) applications|job (?:is )?no "

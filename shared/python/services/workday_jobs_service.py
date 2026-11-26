@@ -130,7 +130,10 @@ STREAM_TOP = 120
 # Too many open files" — it even broke later imports). Keep-alive across
 # hosts is worth little here (~6 requests/host), so cap to 32 host pools x
 # 8 sockets: worst case ~256 pooled + ~96 in-flight FDs, far under the limit.
-_SESSION = requests.Session()
+# Names the crawler and signs every request, each redirect hop included.
+from services.web_bot_auth import BotSession as _BotSession  # noqa: E402
+
+_SESSION = _BotSession()
 _SESSION.mount("https://", requests.adapters.HTTPAdapter(
     pool_connections=32, pool_maxsize=8, max_retries=0,
 ))
