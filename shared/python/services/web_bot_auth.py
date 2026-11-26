@@ -10,6 +10,9 @@ Reference: developers.cloudflare.com/bots/reference/bot-verification/web-bot-aut
 
 What this module does:
 
+* `USER_AGENT` / `BOT_TOKEN` are THE crawler's name. Every request it sends
+  to an employer, an ATS or a public data source uses them, through
+  `bot_headers(url, headers)` or a `BotSession`, which also sign it;
 * `sign_request_headers(url)` returns the three headers for one outbound
   request: `Signature-Agent` (a quoted https URL), `Signature-Input` covering
   `("@authority" "signature-agent")` with created / expires / keyid / alg /
@@ -20,20 +23,33 @@ What this module does:
 * `crawler_identity_bp` serves that directory and a plain page describing the
   crawler, which the User-Agent links to.
 
-Switched off unless configured. Cloudflare asks that a bot starts signing only
-AFTER its submission is accepted, so publishing the directory (needs
-`WEB_BOT_AUTH_KEY`) and signing requests (also needs `WEB_BOT_AUTH_SIGN=1`) are
-two separate steps the owner takes.
+Switched off unless configured: publishing the directory needs
+`WEB_BOT_AUTH_KEY`, and signing also needs `WEB_BOT_AUTH_SIGN=1`. Once signing
+is on, EVERY request is signed, whatever the host. Cloudflare's review
+(2026-11-19) rejected a crawler that "can" sign: Web Bot Auth is our only
+verification method, so a request without a signature is a request Cloudflare
+cannot attribute to us. The page at `/bot` states which of the two is true,
+from the same setting, so it can never claim more than the crawler does.
+Every process that sends crawler traffic (ingest-runner, the worker and the
+gateway) must carry the same two settings.
+
+Identity, after the same review: the bot is submitted as "Aspirely Bot", so
+the User-Agent token is `AspirelyBot`. It was `JobPilotIngest`, which also
+named an unrelated product. robots.txt rules written for the old token are
+still obeyed (`ROBOTS_TOKENS`).
 
 Environment:
   WEB_BOT_AUTH_KEY    base64 of the 32-byte Ed25519 private seed, or a PEM
                       private key (`scripts/web_bot_auth_keygen.py` makes one)
   WEB_BOT_AUTH_AGENT  the https origin hosting the directory
                       (default https://aspirely.me)
-  WEB_BOT_AUTH_SIGN   "1" to sign outbound crawler requests (default off)
-  WEB_BOT_AUTH_HOSTS  comma-separated host suffixes to sign for
-                      (default ".myworkdayjobs.com,crawltest.com")
+  WEB_BOT_AUTH_SIGN   "1" to sign every outbound crawler request (default off)
   WEB_BOT_AUTH_TTL    seconds a signature stays valid (default 60)
+  WEB_BOT_AUTH_CONTACT                 address on the /bot page
+  WEB_BOT_AUTH_OPERATOR                legal name of the operating company
+  WEB_BOT_AUTH_OPERATOR_JURISDICTION   where it is registered
+  WEB_BOT_AUTH_OPERATOR_NUMBER         its company registration number
+  WEB_BOT_AUTH_OPERATOR_ADDRESS        registered address (optional)
 """
 from __future__ import annotations
 
@@ -44,7 +60,7 @@ import os
 import secrets
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 DEFAULT_AGENT = "https://aspirely.me"
@@ -53,6 +69,16 @@ DIRECTORY_CONTENT_TYPE = "application/http-message-signatures-directory+json"
 REQUEST_TAG = "web-bot-auth"
 DIRECTORY_TAG = "http-message-signatures-directory"
 INFO_PATH = "/bot"
+
+#: The bot's name as submitted to Cloudflare, and the User-Agent token that
+#: must match it.
+BOT_NAME = "Aspirely Bot"
+BOT_TOKEN = "AspirelyBot"
+BOT_VERSION = "1.2"
+#: robots.txt groups we obey: ours, and the token we used before 2026-11-20,
+#: so a site that wrote rules for the old name is not suddenly crawled.
+ROBOTS_TOKENS = (BOT_TOKEN, "JobPilotIngest")
+_SIGNATURE_HEADERS = ("signature", "signature-input", "signature-agent")
 
 _lock = threading.Lock()
 _cached: Dict[str, Any] = {}
@@ -142,17 +168,79 @@ def signing_enabled() -> bool:
     return str(os.getenv("WEB_BOT_AUTH_SIGN") or "").strip() == "1" and private_key() is not None
 
 
-def _signed_hosts() -> List[str]:
-    raw = os.getenv("WEB_BOT_AUTH_HOSTS") or ".myworkdayjobs.com,crawltest.com"
-    return [h.strip().lower() for h in raw.split(",") if h.strip()]
-
-
 def should_sign(url: str) -> bool:
+    """Every http(s) request, once signing is on. There is no host list: a
+    request we leave unsigned is one Cloudflare cannot attribute to us."""
     if not signing_enabled():
         return False
-    host = (urlparse(url).hostname or "").lower()
-    return any(host == s.lstrip(".") or host.endswith(s if s.startswith(".") else "." + s)
-               for s in _signed_hosts())
+    try:
+        p = urlparse(str(url or ""))
+    except Exception:
+        return False
+    return p.scheme in ("http", "https") and bool(p.hostname)
+
+
+def user_agent() -> str:
+    return f"Mozilla/5.0 (compatible; {BOT_TOKEN}/{BOT_VERSION}; +{info_url()})"
+
+
+#: Read once at import, like every other header dict that embeds it.
+USER_AGENT = user_agent()
+
+
+def bot_headers(url: str, headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """`headers` (copied) with the crawler's User-Agent and, when signing is
+    on, a fresh signature for `url`. Any signature already present is dropped
+    first, because it was made for another request. Never raises: a request
+    is never blocked on its signature."""
+    out = {k: v for k, v in (headers or {}).items()
+           if str(k).lower() not in _SIGNATURE_HEADERS and str(k).lower() != "user-agent"}
+    out["User-Agent"] = USER_AGENT
+    try:
+        if should_sign(url):
+            out.update(sign_request_headers(url))
+    except Exception:
+        pass
+    return out
+
+
+def robots_allows(parser: Any, url: str) -> bool:
+    """A robots.txt parser's answer for every token we have used."""
+    return all(bool(parser.can_fetch(token, url)) for token in ROBOTS_TOKENS)
+
+
+def _sign_prepared(request: Any) -> None:
+    for name in [k for k in request.headers if str(k).lower() in _SIGNATURE_HEADERS]:
+        del request.headers[name]
+    request.headers["User-Agent"] = USER_AGENT
+    try:
+        if should_sign(request.url):
+            request.headers.update(sign_request_headers(request.url))
+    except Exception:
+        pass
+
+
+def _session_class():
+    import requests
+
+    class BotSession(requests.Session):
+        """A `requests.Session` that names the crawler and signs EVERY request
+        it sends, including each hop of a redirect (`Session.send` runs once
+        per hop, so a redirect to another host gets a signature for that
+        host, not a stale one for the first)."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.headers["User-Agent"] = USER_AGENT
+
+        def send(self, request, **kwargs):
+            _sign_prepared(request)
+            return super().send(request, **kwargs)
+
+    return BotSession
+
+
+BotSession = _session_class()
 
 
 def sign_request_headers(url: str, *, now: Optional[float] = None, key=None,
@@ -207,25 +295,28 @@ def directory_response(host: str, *, now: Optional[float] = None, key=None,
 INFO_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Aspirely crawler</title>
+<title>Aspirely Bot</title>
 <style>body{{font:16px/1.55 system-ui,sans-serif;max-width:42rem;margin:2rem auto;padding:0 1rem;color:#1b1b1b;background:#fff}}
 code{{background:#f2f2f2;padding:0 .25rem}}</style></head><body>
-<h1>Aspirely job crawler</h1>
-<p>Aspirely helps job seekers find openings that fit them. Our crawler reads
-<strong>public</strong> job postings from employers' career sites and links
-every listing back to the employer's own page, where people apply.</p>
+<h1>Aspirely Bot</h1>
+<p>Aspirely helps job seekers find openings that fit them. Aspirely Bot, our
+crawler, reads <strong>public</strong> job postings from employers' career
+sites and links every listing back to the employer's own page, where people
+apply.</p>
+{operator}
 <h2>How it behaves</h2>
 <ul>
-<li>User-Agent contains <code>JobPilotIngest</code> and a link to this page.</li>
+<li>Its User-Agent is <code>{user_agent}</code>: the token
+<code>{token}</code> and a link to this page.</li>
 <li>It reads only public job listings and job descriptions. It never signs in,
 never submits forms and never reads personal data.</li>
-<li>It obeys <code>robots.txt</code>: each site's file is read at least once a
-day, and a page it disallows is not requested. If the file cannot be read, the
+<li>It obeys <code>robots.txt</code> rules for <code>{token}</code>, and for
+<code>JobPilotIngest</code>, its name before November 2026. Each site's file
+is read at least once a day, and a page it disallows is not requested. If the file cannot be read, the
 crawler waits and does not guess.</li>
 <li>It spaces its requests per vendor, stops for minutes when a site
 challenges or rate-limits it, and never retries into a challenge.</li>
-<li>Requests can carry an HTTP Message Signature (Web Bot Auth). The public
-keys are published at <a href="{directory}">{directory}</a>.</li>
+<li>{signing}</li>
 </ul>
 <h2>Contact</h2>
 <p>To ask us to slow down, stop, or change how we read your site, email
@@ -234,9 +325,49 @@ keys are published at <a href="{directory}">{directory}</a>.</li>
 """
 
 
+def _env(name: str) -> str:
+    return str(os.getenv(name) or "").strip()
+
+
+def operator_html() -> str:
+    """Who runs the bot, as Cloudflare's review asked: the operating company,
+    where it is registered and its company number. Rendered only when the
+    owner has set all three, so the page never states a guess."""
+    from html import escape
+
+    name = _env("WEB_BOT_AUTH_OPERATOR")
+    where = _env("WEB_BOT_AUTH_OPERATOR_JURISDICTION")
+    number = _env("WEB_BOT_AUTH_OPERATOR_NUMBER")
+    if not (name and where and number):
+        return ""
+    address = _env("WEB_BOT_AUTH_OPERATOR_ADDRESS")
+    rows = [f"<p>Aspirely Bot is operated by <strong>{escape(name)}</strong>, "
+            f"a company registered in {escape(where)}, company number "
+            f"{escape(number)}.</p>"]
+    if address:
+        rows.append(f"<p>Registered address: {escape(address)}</p>")
+    return "\n".join(rows)
+
+
+def signing_html() -> str:
+    directory = agent_origin() + DIRECTORY_PATH
+    link = f'<a href="{directory}">{directory}</a>'
+    if signing_enabled():
+        return ("Every request it sends carries Web Bot Auth signature headers "
+                "(<code>Signature</code>, <code>Signature-Input</code> and "
+                "<code>Signature-Agent</code>, HTTP Message Signatures per RFC 9421). "
+                f"The public keys are published at {link}.")
+    return ("Its Web Bot Auth key directory is published at "
+            f"{link}; request signing is not switched on yet.")
+
+
 def info_page() -> str:
-    contact = str(os.getenv("WEB_BOT_AUTH_CONTACT") or "harshith@aithrex.tech").strip()
-    return INFO_HTML.format(directory=agent_origin() + DIRECTORY_PATH, contact=contact)
+    from html import escape
+
+    contact = _env("WEB_BOT_AUTH_CONTACT") or "harshith@aithrex.tech"
+    return INFO_HTML.format(operator=operator_html(), signing=signing_html(),
+                            user_agent=escape(USER_AGENT), token=BOT_TOKEN,
+                            contact=escape(contact))
 
 
 def _blueprint():

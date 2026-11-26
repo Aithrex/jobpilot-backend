@@ -35,9 +35,11 @@ from services.ats_providers.base import ChallengeError, CrawlPolicy, FetchContex
 
 logger = logging.getLogger(__name__)
 
-# The link must be a page WE serve (`web_bot_auth.INFO_PATH`): it was
-# jobpilot.ai, a domain we do not operate, until 2026-11-17.
-DEFAULT_UA = "Mozilla/5.0 (compatible; JobPilotIngest/1.1; +https://aspirely.me/bot)"
+from services import web_bot_auth  # noqa: E402
+
+# THE crawler's name (`web_bot_auth.USER_AGENT`): the token `AspirelyBot` and
+# a link to the page we serve at `/bot`.
+DEFAULT_UA = web_bot_auth.USER_AGENT
 
 # A vendor serving HTML must not be told we only accept JSON: several return 406
 # or a stripped page when the Accept header disagrees with what they render.
@@ -278,7 +280,9 @@ def make_fetchers(
             def _session():
                 sess = getattr(_local, "session", None)
                 if sess is None:
-                    sess = _requests.Session()
+                    # Names the crawler and signs every request it sends,
+                    # each redirect hop included.
+                    sess = web_bot_auth.BotSession()
                     _local.session = sess
                 return sess
 

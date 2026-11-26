@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"
 HTTP_TIMEOUT = 12
-UA = "JobPilot/1.0 (+https://jobpilot.app) profile-analyzer"
+from services.web_bot_auth import USER_AGENT as UA  # noqa: E402
 # GitHub login rules: 1-39 chars, alphanumeric or single hyphens, no edge hyphen.
 USERNAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 

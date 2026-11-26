@@ -28,6 +28,7 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from utils.db_connect import DBConnect
+from services.web_bot_auth import USER_AGENT as _BOT_UA
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +149,7 @@ def _generate_tech_news() -> list:
     try:
         resp = requests.get(
             HN_API, params={"tags": "front_page", "hitsPerPage": 20},
-            headers={"User-Agent": "JobPilot/1.0 (+https://jobpilot.app)"},
+            headers={"User-Agent": _BOT_UA},
             timeout=HTTP_TIMEOUT,
         )
         if resp.status_code != 200:

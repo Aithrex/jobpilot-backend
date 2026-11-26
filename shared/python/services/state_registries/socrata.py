@@ -42,12 +42,9 @@ _MAX_RETRIES = 3
 
 
 def _session():
-    import requests
-    s = requests.Session()
-    s.headers.update({
-        "Accept": "application/json",
-        "User-Agent": "JobPilot/1.0 (+employer-coverage; contact via site)",
-    })
+    from services.web_bot_auth import BotSession
+    s = BotSession()
+    s.headers.update({"Accept": "application/json"})
     token = (os.getenv("SOCRATA_APP_TOKEN") or "").strip()
     if token:
         s.headers["X-App-Token"] = token

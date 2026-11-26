@@ -274,7 +274,7 @@ class TestNonTechPrefilter:
                 ]}
 
         monkeypatch.setattr(dp.requests, "get",
-                            lambda url, timeout=None: FakeResp())
+                            lambda url, timeout=None, headers=None: FakeResp())
         # Default (tech-only) filter drops the marketing role...
         default_titles = {r["title"] for r in dp._fetch_greenhouse("acme", "Acme")}
         assert default_titles == {"Software Engineer"}
