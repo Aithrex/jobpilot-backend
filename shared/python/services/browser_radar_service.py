@@ -161,10 +161,24 @@ def _db():
     return DBConnect().get_db()
 
 
+def contributor_scope() -> str:
+    """Who may send listings (`BROWSER_RADAR_CONTRIBUTORS_SCOPE`).
+
+    `all` (the default, owner's decision 2026-11-26): every signed-in account,
+    so every existing and future user is a contributor. `listed`: only admins
+    and `BROWSER_RADAR_CONTRIBUTORS`. Anything else reads as `listed`.
+    """
+    raw = str(os.environ.get("BROWSER_RADAR_CONTRIBUTORS_SCOPE", "all")).strip().lower()
+    return "all" if raw == "all" else "listed"
+
+
 def is_contributor(email: Any) -> bool:
-    """An admin (`users.is_admin` or the admin set) or a listed email."""
+    """Every signed-in account by default; with scope `listed`, an admin
+    (`users.is_admin` or the admin set) or a listed email."""
     if not isinstance(email, str) or not email.strip():
         return False
+    if contributor_scope() == "all":
+        return True
     key = email.strip().lower()
     if key in _ADMIN_EMAILS or key in _contributor_list():
         return True

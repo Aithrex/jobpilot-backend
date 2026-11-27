@@ -49,6 +49,8 @@ def db(monkeypatch):
     monkeypatch.setattr(w, "registry_members",
                         lambda source: list(MEMBERS) if w.normalize_source(source) == w.SOURCE_WORKDAY else [])
     monkeypatch.setenv("BROWSER_RADAR_CONTRIBUTORS", CONTRIB)
+    # These tests cover the `listed` gate; the default (`all`) is tested below.
+    monkeypatch.setenv("BROWSER_RADAR_CONTRIBUTORS_SCOPE", "listed")
     monkeypatch.delenv("BROWSER_RADAR_INGEST", raising=False)
     monkeypatch.delenv("BROWSER_RADAR_ENABLED", raising=False)
     yield d
@@ -443,3 +445,27 @@ class TestRoutes:
         r = _call(app, CONTRIB, "post", "/api/jobs/browser-radar/listings",
                   data="x" * (radar.MAX_BODY_BYTES + 1))
         assert r.status_code == 400 and r.get_json()["error"] == "invalid_batch"
+
+
+class TestEveryAccountByDefault:
+    """Owner's decision 2026-11-26: every signed-in account is a contributor
+    unless BROWSER_RADAR_CONTRIBUTORS_SCOPE=listed."""
+
+    def test_default_scope_is_all(self, db, monkeypatch):
+        monkeypatch.delenv("BROWSER_RADAR_CONTRIBUTORS_SCOPE", raising=False)
+        assert radar.contributor_scope() == "all"
+        assert radar.is_contributor(OTHER) is True
+        assert radar.is_contributor("someone.new@example.com") is True
+        assert radar.is_contributor("") is False
+        assert radar.build_plan(OTHER)["contributor"] is True
+
+    def test_default_scope_accepts_any_accounts_batch(self, db, monkeypatch):
+        monkeypatch.delenv("BROWSER_RADAR_CONTRIBUTORS_SCOPE", raising=False)
+        out = radar.ingest_batch(OTHER, _batch([_posting("JR9")]))
+        assert out["mode"] == "on" and out["postings"]["created"] == 1
+
+    def test_listed_scope_restores_the_gate(self, db, monkeypatch):
+        monkeypatch.setenv("BROWSER_RADAR_CONTRIBUTORS_SCOPE", "listed")
+        assert radar.is_contributor(OTHER) is False
+        monkeypatch.setenv("BROWSER_RADAR_CONTRIBUTORS_SCOPE", "typo")
+        assert radar.is_contributor(OTHER) is False
