@@ -214,6 +214,25 @@ def save_profile():
 
 
 # ------------------------------------------------------------------
+# GET /api/apply/brief: the candidate brief (markdown + cite-able facts)
+# ------------------------------------------------------------------
+@apply_bp.route("/brief", methods=["GET"])
+@jwt_required()
+def get_candidate_brief():
+    from services import candidate_brief
+    try:
+        brief = candidate_brief.get_brief(get_jwt_identity())
+    except Exception as e:
+        logger.exception("apply/brief error: %s", e)
+        return jsonify({"error": "brief_unavailable",
+                        "message": "Could not build your profile brief right now."}), 500
+    if not brief:
+        return jsonify({"error": "no_profile",
+                        "message": "Upload a resume or answer the application questions first."}), 404
+    return jsonify(brief), 200
+
+
+# ------------------------------------------------------------------
 # POST /api/apply/answer — distinctive answer to an open-ended question
 # ------------------------------------------------------------------
 @apply_bp.route("/answer", methods=["POST"])
@@ -257,6 +276,31 @@ def generate_answer():
 
     try:
         user_email = get_jwt_identity()
+
+        # Candidate brief (2026-11-26): with client facts, add what Aspirely
+        # holds about the person (stable srv.* ids) and serve a repeat question
+        # from the answer cache, which spends no quota and no model call.
+        from services import candidate_brief
+        brief = None
+        cache_key = ""
+        if facts:
+            try:
+                brief = candidate_brief.get_brief(user_email)
+            except Exception as e:  # a brief failure never blocks an answer
+                logger.info("apply/answer: brief soft-fail: %s", type(e).__name__)
+                brief = None
+            if brief:
+                facts = candidate_brief.merge_facts(facts, brief.get("facts") or [])
+            cache_key = candidate_brief.cache_key(
+                user_email, (brief or {}).get("hash", ""), question, company, role, facts)
+            hit = candidate_brief.cache_get(cache_key)
+            if hit:
+                return jsonify({
+                    "variants": hit, "usage": None, "grounding": "client_facts",
+                    "cached": True,
+                    "brief_hash": (brief or {}).get("hash", ""),
+                    "cited_facts": candidate_brief.cited_server_facts(hit, facts),
+                }), 200
 
         # Server-side fill cap (per authenticated user) — gate before any spend.
         fill_capped = _fill_cap_exceeded(user_email)
@@ -320,8 +364,13 @@ def generate_answer():
         except Exception as e:
             logger.info("apply/answer: history write soft-fail: %s", e)
 
-        return jsonify({"variants": variants, "usage": usage,
-                        "grounding": "client_facts" if facts else "resume"}), 200
+        body = {"variants": variants, "usage": usage,
+                "grounding": "client_facts" if facts else "resume", "cached": False}
+        if facts:
+            candidate_brief.cache_put(cache_key, user_email, variants)
+            body["brief_hash"] = (brief or {}).get("hash", "")
+            body["cited_facts"] = candidate_brief.cited_server_facts(variants, facts)
+        return jsonify(body), 200
     except Exception as e:
         logger.exception("apply/answer error: %s", e)
         return jsonify({"error": "Failed to generate answer. Please try again."}), 500
