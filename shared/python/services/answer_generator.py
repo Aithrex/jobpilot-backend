@@ -444,16 +444,16 @@ class AnswerGenerator:
             )
         job_context = "\n".join(job_context_parts) or "(no job description provided)"
 
+        # Order matters for cost and speed (candidate brief, 2026-11-26): the
+        # part that is the same for every question this person asks (the
+        # instructions, the rules and their facts) comes FIRST, so Vertex AI's
+        # implicit context cache serves it; the job and the question, which
+        # change per call, come LAST.
         prompt = (
             "You are helping a candidate answer ONE open-ended question on a job\n"
             "application form, in the CANDIDATE'S OWN VOICE. The answer is submitted\n"
             "as their words, so every claim must come from the numbered FACTS below\n"
             "and nowhere else.\n\n"
-            + "=== THE QUESTION BEING ASKED ===\n" + wrap_untrusted("question", question.strip()) + "\n\n"
-            + f"=== THE JOB ===\n{job_context}\n\n"
-            + "=== CANDIDATE FACTS (cite by id) ===\n"
-            + wrap_untrusted("candidate_facts", facts_block(facts, redact_pii_for_model)) + "\n\n"
-            + _DISTINCTIVENESS_BLOCK + "\n"
             "CITATION RULES (an answer that breaks one is thrown away):\n"
             "  • List in used_fact_ids EVERY fact id the answer relies on, exactly as\n"
             "    written inside the brackets. Never invent an id.\n"
@@ -461,16 +461,21 @@ class AnswerGenerator:
             "    credentials that appear in a fact you cite. No other number at all.\n"
             "  • Facts whose id starts with jd. only name the company and role; they\n"
             "    say nothing about the candidate.\n\n"
-            f"Tone: {tone}. {NO_DASH_RULE}\n\n"
-            f"Produce {n_variants} DISTINCT answer variants, each taking a different\n"
-            "ANGLE on the question (not light rewrites of each other).\n\n"
-            "Return a JSON object with EXACTLY this structure:\n"
+            + _DISTINCTIVENESS_BLOCK + "\n"
+            + "Return a JSON object with EXACTLY this structure:\n"
             "{\n"
             '  "variants": [\n'
             '    {"answer": "the full answer, ready to paste", "angle": "3-5 word label", '
             '"used_fact_ids": ["exp[0].title"]}\n'
             "  ]\n"
-            "}\n"
+            "}\n\n"
+            + "=== CANDIDATE FACTS (cite by id) ===\n"
+            + wrap_untrusted("candidate_facts", facts_block(facts, redact_pii_for_model)) + "\n\n"
+            + f"=== THE JOB ===\n{job_context}\n\n"
+            + f"Tone: {tone}. {NO_DASH_RULE}\n"
+            + f"Produce {n_variants} DISTINCT answer variants, each taking a different\n"
+            "ANGLE on the question (not light rewrites of each other).\n\n"
+            + "=== THE QUESTION BEING ASKED ===\n" + wrap_untrusted("question", question.strip()) + "\n"
         )
 
         try:

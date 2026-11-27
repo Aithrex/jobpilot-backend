@@ -26,7 +26,8 @@ FACTS = [
 
 _COLLECTIONS = ("users", "resume_assets", "user_resumes", "application_answers",
                 "feature_usage", "quota_ledger", "quota_counters", "user_preferences",
-                "visa_profiles", "application_answer_library", "auto_submit_settings")
+                "visa_profiles", "application_answer_library", "auto_submit_settings",
+                "candidate_briefs", "answer_cache")
 
 
 @pytest.fixture()
