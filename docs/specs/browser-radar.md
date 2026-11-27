@@ -136,7 +136,9 @@ real fixes.
    `BROWSER_RADAR_INGEST=dry_run` in `/etc/jobpilot/stack.env` (the gateway
    reads it; the crawler does not) and restart the gateway container the way
    the runbook does (`infra/compose/README.md`).
-3. **Who may send.** Admins always may. Others: `BROWSER_RADAR_CONTRIBUTORS=a@x.com,b@y.com`.
+3. **Who may send.** Every signed-in account, by default (owner's decision
+   2026-11-26, `BROWSER_RADAR_CONTRIBUTORS_SCOPE=all`). Set the scope to
+   `listed` to limit it to admins and `BROWSER_RADAR_CONTRIBUTORS=a@x.com,b@y.com`.
 4. **Off switch.** `BROWSER_RADAR_INGEST=off` refuses every batch (409);
    `BROWSER_RADAR_ENABLED=0` also empties the plan.
 5. **What it changes.** A browser write records no ingest run of its own
