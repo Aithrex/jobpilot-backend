@@ -26,6 +26,10 @@ The [Gmail tracker contract](specs/gmail-tracker-contract.md) records the
 2026-10-25 matching, review, scan-continuation, and slim-history pagination
 changes, including the 60-day initial scan scope and retained OAuth controls.
 
+[Extension AI answers](specs/extension-ai-answers.md) is the cited
+`POST /api/apply/answer` contract the ApplyPilot extension uses for store
+users: client facts in, `used_fact_ids` out, uncited drafts dropped.
+
 [Browser Radar](specs/browser-radar.md) is the `radar-1` contract: Workday
 listings the owner's own browser reads while the crawler's box is behind
 Workday's bot wall, written through the crawler's own path, on by default for
