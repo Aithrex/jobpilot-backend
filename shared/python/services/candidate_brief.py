@@ -36,7 +36,7 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 COLLECTION = "candidate_briefs"
-BRIEF_VERSION = "brief-1"
+BRIEF_VERSION = "brief-2"  # brief-2: no work_auth_country, no unusable answers
 ID_PREFIX = "srv."
 
 MAX_FACT_TEXT = 500
@@ -49,7 +49,6 @@ _DECLARED: List[Tuple[str, str, str]] = [
     ("requires_sponsorship", "srv.auth.sponsorship_now", "Needs visa sponsorship now"),
     ("requires_sponsorship_future", "srv.auth.sponsorship_future", "Will need visa sponsorship in the future"),
     ("visa_status", "srv.auth.visa_status", "Visa status"),
-    ("work_auth_country", "srv.auth.country", "Authorized to work in"),
     ("willing_to_relocate", "srv.pref.relocate", "Willing to relocate"),
     ("remote_preference", "srv.pref.remote", "Remote preference"),
     ("notice_period", "srv.pref.notice_period", "Notice period"),
@@ -70,6 +69,29 @@ _FORBIDDEN = frozenset({
     "disability_status", "pronouns", "criminal_history", "email", "phone",
     "address_line1", "address_line2", "postal_code", "current_salary",
 })
+
+
+# Answers that must be text: a bare Yes/No here says nothing true (live
+# check 2026-11-26: "Desired salary: Yes").
+_TEXT_ONLY = frozenset({"desired_salary", "notice_period", "current_location", "earliest_start_date"})
+
+
+def _usable(key: str, value: Any) -> bool:
+    """Whether a declared answer belongs in the brief. Leaves out empty values,
+    a yes/no where text is expected, and a start date already past (the model
+    would offer it as the person's availability)."""
+    if value in (None, "", []):
+        return False
+    if key in _TEXT_ONLY:
+        if isinstance(value, bool) or str(value).strip().lower() in ("yes", "no", "true", "false"):
+            return False
+    if key == "earliest_start_date":
+        try:
+            day = datetime.strptime(str(value).strip()[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return True
+        return day >= datetime.now(timezone.utc).date()
+    return True
 
 
 def _db():
@@ -186,7 +208,7 @@ def build_brief(structured: Optional[Dict[str, Any]],
         md.append("")
 
     rows = [(fid, label, declared.get(key)) for key, fid, label in _DECLARED
-            if key not in _FORBIDDEN and declared.get(key) not in (None, "", [])]
+            if key not in _FORBIDDEN and _usable(key, declared.get(key))]
     if rows:
         md.append("## Application answers")
         for fid, label, value in rows:

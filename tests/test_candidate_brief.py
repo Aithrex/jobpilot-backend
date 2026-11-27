@@ -184,3 +184,26 @@ class TestAnswer:
         self._post(app)
         self._post(app, question="Why this role?")
         assert len(llm.calls) == 2
+
+
+def test_brief_leaves_out_ambiguous_and_unusable_answers():
+    """Live check 2026-11-26: "Authorized to work in: India" next to the US
+    answers, "Desired salary: Yes", and a start date already past."""
+    out = cb.build_brief({}, {
+        "work_authorized_us": True,
+        "work_auth_country": "India",
+        "desired_salary": True,
+        "notice_period": "Immediate",
+        "earliest_start_date": "2020-01-01",
+    })
+    text = "\n".join(f["text"] for f in out["facts"])
+    assert "Authorized to work in the US: Yes" in text
+    assert "India" not in text
+    assert "Desired salary" not in text
+    assert "Earliest start date" not in text
+    assert "Notice period: Immediate" in text
+
+
+def test_future_start_date_is_kept():
+    out = cb.build_brief({}, {"earliest_start_date": "2999-01-01"})
+    assert any(f["id"] == "srv.pref.start_date" for f in out["facts"])
