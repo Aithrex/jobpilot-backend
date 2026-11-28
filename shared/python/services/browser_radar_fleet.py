@@ -11,9 +11,12 @@ browsers read the same boards N times. This module shares the work out:
   `acquire_lease` idiom), so two callers can never hold the same board. A
   lease lasts 60 minutes. Expiry lives in the claim filter, so a browser that
   went away costs the board an hour and needs no reaper.
-* **A read completes a lease.** `record_reads` runs after a written batch.
-  A known board read with no search term is a read of that board, whoever
-  held the lease. A title search is not: it proves nothing about the board.
+* **A read completes a lease, for its holder.** `record_reads` runs after a
+  written batch. A known board read with no search term is a read of that
+  board only when the uploading account holds the board's lease (live, or
+  lapsed under 30 minutes ago). The same read from any other account still
+  ingests its postings, and is noted as `last_seen_unleased_at`, which is not
+  coverage. A title search is never a read: it proves nothing about the board.
 * **The brake.** Workday walls an address, not an account. One browser's
   challenge is that browser's problem. Three accounts challenged on one board
   park the board. Three accounts challenged inside an hour pause every claim
@@ -58,6 +61,9 @@ EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 CLAIM_DEFAULT = 6
 CLAIM_MAX = 12
 LEASE_MINUTES = 60
+#: A termless read still completes a lease that lapsed this recently: the
+#: board was read inside the hour and the upload came late.
+LEASE_GRACE_MINUTES = 30
 #: Boards one account may claim in a UTC day (`BROWSER_RADAR_CLAIMS_PER_DAY`).
 CLAIMS_PER_DAY = 60
 
@@ -680,9 +686,12 @@ def record_reads(db, email: str, boards_read: List[Dict[str, Any]],
     """What one WRITTEN batch says about boards.
 
     `boards_read`: the known boards it read with no search term, each
-    `{key, board, postings}`. Each is a read of that board whoever holds the
-    lease: the read is stamped, the lease cleared and the board made due
-    again one interval on.
+    `{key, board, postings}`. When THIS account holds the board's lease
+    (`lease.by` is its pseudonym and `lease.until` is not more than
+    `LEASE_GRACE_MINUTES` in the past) the read is stamped, the lease cleared
+    and the board made due again one interval on. From any other account the
+    board row only gets `last_seen_unleased_at`: before this rule any account
+    could mark every board read without reading one, and inflate `by_browser`.
 
     `reads`: boards the browser could not read. Parking a board for days is
     worth more to an abuser than marking one read, so it is taken only from
@@ -691,7 +700,7 @@ def record_reads(db, email: str, boards_read: List[Dict[str, Any]],
     Best effort: a failure here never fails the upload."""
     from pymongo import ReturnDocument
 
-    counts = {"completed": 0, "recorded": 0, "ignored": 0}
+    counts = {"completed": 0, "unleased": 0, "recorded": 0, "ignored": 0}
     who = account_pseudonym(email)
     try:
         merged: Dict[str, Dict[str, Any]] = {}
@@ -706,6 +715,11 @@ def record_reads(db, email: str, boards_read: List[Dict[str, Any]],
                 except (TypeError, ValueError):
                     boosts[doc["_id"]] = 1.0
         target = target_hours()
+        # A lease that lapsed a moment ago still counts: the browser read the
+        # board inside its hour and the upload arrived late. Once another
+        # account claims the board, `lease.by` is theirs and this no longer
+        # matches.
+        held_since = now - timedelta(minutes=LEASE_GRACE_MINUTES)
         for key, entry in merged.items():
             boost = max(1.0, min(BOOST_MAX, boosts.get(key, 1.0)))
             interval = max(MIN_INTERVAL_HOURS, target / boost)
@@ -717,12 +731,25 @@ def record_reads(db, email: str, boards_read: List[Dict[str, Any]],
             if postings:
                 # Postings on the page are proof the board can be read.
                 fields["parked_until"] = None
-            on_insert = dict(_priority_defaults(), challenges=0, created_at=now)
-            if not postings:
-                on_insert["parked_until"] = None
-            db[LEASES].update_one({"_id": key}, {"$set": fields, "$setOnInsert": on_insert},
-                                  upsert=True)
-            counts["completed"] += 1
+            # The holder is named in the filter of the write that completes
+            # the lease, so an account that does not hold the board cannot
+            # mark it read (and cannot move `due_at` or the coverage number).
+            done = db[LEASES].update_one(
+                {"_id": key, "lease.by": who, "lease.until": {"$gt": held_since}},
+                {"$set": fields})
+            if done.matched_count:
+                counts["completed"] += 1
+                continue
+            # Not the holder. The postings were ingested as always; the board
+            # is only noted as seen, apart from the read ledger.
+            on_insert = dict(entry["board"], in_registry=True, **_new_row_defaults(now),
+                             **_priority_defaults())
+            db[LEASES].update_one(
+                {"_id": key},
+                {"$set": {"last_seen_unleased_at": now, "last_unleased_postings": postings},
+                 "$setOnInsert": on_insert},
+                upsert=True)
+            counts["unleased"] += 1
         for read in reads:
             if read.get("key") is None:
                 counts["ignored"] += 1

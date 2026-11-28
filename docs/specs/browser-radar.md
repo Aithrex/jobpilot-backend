@@ -1,4 +1,4 @@
-# Browser Radar (`radar-1`, `radar-2`)
+# Browser Radar (`radar-1`, `radar-2`, `radar-3`)
 
 **Status:** built 2026-11-19; writes are ON by default for contributor
 accounts (the owner's call, 2026-11-19). Code:
@@ -12,6 +12,16 @@ browser at a time, and Admin gets a coverage number. It is additive. A
 `radar-1` client keeps working unchanged. See [`radar-2`](#radar-2-the-fleet)
 below. Code: `shared/python/services/browser_radar_fleet.py`, tests
 `tests/test_browser_radar_fleet.py`.
+
+`radar-3` (built 2026-11-27) is one posting from any job page: when a person
+who opted in opens a single posting on any ATS, the extension records it. It
+is additive too. See [`radar-3`](#radar-3-one-posting-from-any-job-page).
+Code: `shared/python/services/browser_radar_posting.py`, tests
+`tests/test_browser_radar_posting.py`. The same change made the Workday batch
+match the crawl that production really runs
+([Parity with the crawl](#parity-with-the-crawl)) and made a shared board
+count as read only for its lease holder
+([Uploads complete a lease](#uploads-complete-a-lease)).
 
 ## Why
 
@@ -36,12 +46,12 @@ source. It covers a sliver of the outage (see "Size" below), not all of it.
 
 - **The server re-derives everything.** The browser sends Workday's raw CXS
   fields (`title`, `externalPath`, `bulletFields`, `postedOn`,
-  `locationsText`, `timeType`, and a detail's `jobPostingInfo`). The server
-  runs `WorkdayProvider._to_raw` and `fetch_detail` (through a stand-in
-  context that answers with the browser's payload) and then the crawler's
-  `_raw_job_to_listing`, `_admit_by_age`, `_adopt_detail_date`. A browser
-  sighting and a crawler sighting are the same row (pinned by
-  `test_browser_row_equals_the_crawler_row`).
+  `locationsText`, `timeType`, and a detail's `jobPostingInfo.jobDescription`).
+  The server maps them the way the production crawl does (`workday_row`
+  mirrors `job_ingest_worker._list_workday`), then runs the crawl's own
+  `_listing_row` and `_admit_by_age`. A browser sighting and a crawler
+  sighting are the same row and the same stored document. See
+  [Parity with the crawl](#parity-with-the-crawl).
 - **Only known boards are written.** A board's `(domain, wd_host, tenant,
   site)` must match a member of `registry_members("workday")`. Anything else
   goes to `browser_radar_unknown_boards` (tenant, site, pod, sightings,
@@ -74,6 +84,59 @@ source. It covers a sliver of the outage (see "Size" below), not all of it.
   do under `would`, writing nothing to `job_postings`; `off` refuses batches.
   A value that is none of the three reads as `dry_run`.
 
+## Parity with the crawl
+
+Production lists Workday through the legacy path. `workday` is in
+`_LEGACY_LISTING_VENDORS`, so `list_member` calls `_list_workday` and
+`fetch_detail` takes its legacy branch. Until 2026-11-27 the browser path
+mapped through `WorkdayProvider._to_raw`, and its test compared against
+`_list_via_provider`. Production does not use that path for Workday, so the
+"same row" claim was pinned against the wrong code.
+
+Now the tests run the real crawl. `run_shard` runs with only the HTTP call
+faked, and the stored document is compared with the one a browser batch
+writes for the same raw posting
+(`test_browser_document_equals_the_crawled_document`). The two may differ in
+three fields, all about who wrote the row: `_id`, `origin` (browser only) and
+`last_ingest_run_id` (crawl only). When no body arrived, the crawl also
+records its failed fetch (`detail_misses`, `detail_next_at`,
+`detail_revision`). A browser asked nobody, so it records no miss.
+
+What changed in the browser path to match the crawl:
+
+| Field | Before | Now, as the crawl does |
+| --- | --- | --- |
+| `detail_ref` | the full CXS URL | the bare `externalPath` (`job/...`) |
+| relative dates | the provider's reader: no "just posted"; hours, weeks and minutes dated | `_approx_iso_from_relative`: "today" and "just" are now, "yesterday", N days, N months. Anything else has no date |
+| a row with no readable date | written undated | skipped (ADR-001). It is counted under `rejected` |
+| the clock for relative dates | the server clock at upload | the batch's own `observed_at` (see below) |
+| the body text | `ats_providers.util.html_to_text` | `workday_cxs_fetcher._detail_html_to_text`, cut at 15,000 characters. So `content_hash`, `description_chars` and the requirements agree |
+| `startDate` in a detail | replaced the listing date | not read. The crawl reads only `jobDescription` from a detail |
+| `location` in a detail | filled an empty listing location | not read |
+
+**`observed_at`.** "Posted Today" and "Posted 3 Days Ago" are counted back
+from the batch's `observed_at`, because the extension can park a batch and
+send it a day later. The bound: an `observed_at` in the future, or more than
+7 days old, or one that does not parse, is ignored and the server clock is
+used. No batch is refused for it.
+
+**Dates in the future.** A date a client states is never believed when it
+lands after the server's clock. It reads as unknown. With the bound above a
+relative `postedOn` cannot land there, and `startDate` is no longer read at
+all. The single posting route applies the same rule to `date_posted`.
+
+Kept different on purpose, each pinned by a test:
+
+- **Script text is dropped.** `<script>`, `<style>` and `<noscript>` blocks
+  are removed before the crawl's converter runs. The crawl's converter would
+  keep their text as prose. A real Workday body holds none, so a real body
+  gives the same text either way. A hostile sender's does not get stored.
+- **`myworkdaysite.com` boards keep the provider's link**
+  (`https://wd1.myworkdaysite.com/recruiting/<tenant>/<site>/job/...`).
+  `_list_workday` builds only `myworkdayjobs.com` addresses and cannot read
+  such a board at all, so there is no crawled row to match.
+- **Nothing is closed, and no run is recorded.** As before.
+
 ## Endpoints
 
 ### `GET /api/jobs/browser-radar/plan`
@@ -100,7 +163,12 @@ postings, 30 details and 200,000 characters per `jobDescription`. Board
 identity must pass the provider's own `tenant`/`site`/`wd_host` patterns.
 Past any bound, or with a bad shape, the whole batch is `400 invalid_batch`.
 A single posting of the wrong shape (or a path that is not `/job/…`) is
-counted as `rejected`.
+counted as `rejected`. So is a posting whose `postedOn` gives no date the
+crawl can read: the crawl skips such a row, and so does this.
+
+`observed_at` (an ISO time, optional) is when the browser read the boards.
+Relative dates are counted back from it when it is not in the future and not
+more than 7 days old. See [Parity with the crawl](#parity-with-the-crawl).
 
 Refusals, in the order they are checked (never 401, which the frontend reads as
 a dead session):
@@ -132,10 +200,13 @@ JWT. Read-only. What the server received from this account in the current UTC
 day, from `browser_radar_batches` (written batches only, never dry runs):
 `available`, `day`, `batches`, `sent`, `created`, `updated`, `touched`,
 `reopened`, `held`, `aged_out`, `rejected`, `boards`, `unknown_boards`,
-`last_at`, and `recorded` (created + updated + touched + reopened: what
-reached the shared list). `available: false` means the count could not be
-read; it is not zero. The extension's "Sent N jobs to Aspirely today" line
-reads `recorded`.
+`last_at`, `staged`, and `recorded` (created + updated + touched + reopened:
+what reached the shared list). `available: false` means the count could not
+be read; it is not zero. The extension's "Sent N jobs to Aspirely today" line
+reads `recorded`. A single posting (`radar-3`) is one batch row of its own
+(`kind: "posting"`), so it is counted here like a batch of one. `staged`
+counts single postings the registry could not place. They are not in
+`recorded`.
 
 ### `GET /api/admin/ops/browser-radar`
 
@@ -145,6 +216,10 @@ no emails) and the current `contributor_scope`, `ingest_mode` and `enabled`.
 `radar-2` adds `coverage` (the stored coverage snapshot with its age) and
 `fleet` (the brake and the leases as they are now). Both are described under
 [`radar-2`](#radar-2-the-fleet). Neither holds an email or an account handle.
+`radar-3` adds `staged_total`, `staged_corroborated` and `staged_by_host`
+(the 10 hosts with the most staged postings, as `{host, postings}`). They are
+counts only: no reporter, no URL. `null` means the count could not be read.
+Each account row also carries `staged`.
 A refused batch leaves no row; it is one log line
 (`radar: batch refused code=... status=...`), and an accepted batch is one
 log line with its counts.
@@ -161,6 +236,11 @@ All additive; dropping them removes the feature's state and nothing else.
 | `browser_radar_board_leases` | `radar-2`. One row per registry board: last read, lease, backoff | kept, never deleted |
 | `browser_radar_coverage_snapshots` | `radar-2`. One coverage measurement per run of `radar_coverage` | TTL 14 days (`expire_at`) |
 | `browser_radar_fleet` | `radar-2`. The brake (`_id: "brake"`), hourly claim and challenge counters (`_id: "h\|YYYYMMDDHH"`), and a note when the registry shrank (`_id: "sync"`) | counters: TTL 3 days. The brake row is kept |
+| `browser_radar_staged_postings` | `radar-3`. Single postings the registry cannot place: an unknown board, or a company's own page | TTL 30 days after the last sighting (`expire_at`) |
+
+`browser_radar_usage` also holds the `radar-3` counters: lookups per hour
+(`email\|pl\|YYYYMMDDHH`), single postings per hour (`email\|ph\|YYYYMMDDHH`)
+and per day (`email\|pd\|YYYYMMDD`).
 
 Every index is listed once in `browser_radar_service.INDEX_SPECS` and mirrored
 in `scripts/migrate_indexes.py` (a test holds the two equal). The service
@@ -222,7 +302,8 @@ lowercased. It is the same address a batch is matched on.
 | `tenant`, `site`, `wd_host`, `domain`, `employer` | The board, as the plan names it. |
 | `stats_tenant` | The tenant its postings are stored under. Coverage counts tenants by this. |
 | `in_registry` | False once the board left the registry. Such a row is never handed out. |
-| `last_read_at` | The newest termless read of the board by a browser. |
+| `last_read_at` | The newest termless read of the board by the account that held its lease. |
+| `last_seen_unleased_at`, `last_unleased_postings` | The newest termless upload for the board from an account that did NOT hold its lease, and how many postings it carried. Not a read. Not coverage. |
 | `last_read_by` | A salted one-way pseudonym of the account. Never the email. |
 | `last_result` | `ok`, `empty`, `gone` or `robots`. |
 | `last_postings` | How many postings that read carried. |
@@ -348,13 +429,31 @@ Refusals: `400 invalid_request` and `429 rate_limited`. Never 401.
 
 This runs after a batch is written, in mode `on` only.
 
-- **A termless read is a read of the board.** Every known board in the batch
-  whose `search_text` is empty sets `last_read_at`, `last_read_by`,
-  `last_result` (`ok`, or `empty` when it carried no postings) and
-  `last_postings`, clears the lease, and sets `due_at = now + target / boost`
-  (never under 3 hours). It counts whoever held the lease. A read is a read.
-- **An empty read counts.** A board with an empty `postings` list is
-  accepted, touches nothing in `job_postings`, and is recorded as `empty`.
+- **A termless read is a read of the board, for its lease holder only.** A
+  known board in the batch whose `search_text` is empty sets `last_read_at`,
+  `last_read_by`, `last_result` (`ok`, or `empty` when it carried no
+  postings) and `last_postings`, clears the lease, and sets
+  `due_at = now + target / boost` (never under 3 hours). It does so only when
+  the uploading account holds the board's lease: `lease.by` is that account's
+  pseudonym, and `lease.until` is in the future or not more than 30 minutes
+  past (`LEASE_GRACE_MINUTES`). The holder is named in the filter of the one
+  write that completes the lease.
+- **The same read from any other account is not a read.** Its postings are
+  ingested exactly as before. The board row only gets `last_seen_unleased_at`
+  and `last_unleased_postings`. `last_read_at`, `due_at` and the lease do not
+  move, so the board stays due and `by_browser` does not count it. Before
+  2026-11-27 any account could mark every board read without reading one.
+- **The grace is for a late upload.** A browser reads the board inside its
+  hour and the upload can arrive a little after. Past 30 minutes the read no
+  longer counts. If another account claimed the board in between, the lease
+  is theirs and the first account's upload does not count either.
+- **`radar-1` clients.** Their plan `stale` tasks carry no lease. They keep
+  working and their postings are still ingested, but their termless reads no
+  longer count toward `by_browser` and no longer move `due_at`. A client
+  that wants its reads to count asks `POST …/claims` first.
+- **An empty read counts,** for the holder. A board with an empty `postings`
+  list is accepted, touches nothing in `job_postings`, and is recorded as
+  `empty`.
 - **A title search is not a read.** A board read with a search term proves
   nothing about the board. It moves nothing in the ledger and leaves the
   lease alone.
@@ -407,7 +506,7 @@ employer coverage keys.
 | `measured_at`, `window_hours` | When, and the window (24). |
 | `tenants_total` | Tenants in the registry. |
 | `tenants_refreshed` | Tenants refreshed by either reader below (the union). |
-| `by_browser` | Tenants with ANY board whose `last_read_at` is inside the window. |
+| `by_browser` | Tenants with ANY board whose `last_read_at` is inside the window. Only a lease holder's read sets `last_read_at`. |
 | `by_crawler` | Tenants whose newest `last_seen_at` among open postings is inside the window. |
 | `boards_total`, `boards_refreshed` | Boards, and boards a browser read inside the window. |
 | `never_read` | Boards no browser has read. |
@@ -463,6 +562,9 @@ coverage job, and `BROWSER_RADAR_INGEST=off` or `dry_run` stops claims.
 7. **Dropping the three `radar-2` collections** removes the leases, the brake
    and the snapshots. The next `radar_coverage` run rebuilds the rows, with
    every board never read.
+8. **Who really read a board.**
+   `db.browser_radar_board_leases.find({last_seen_unleased_at: {$ne: null}}, {last_seen_unleased_at: 1, last_read_at: 1})`
+   lists boards that got uploads from accounts holding no lease.
 
 ### What it does not do
 
@@ -471,3 +573,343 @@ coverage job, and `BROWSER_RADAR_INGEST=off` or `dry_run` stops claims.
   page 1 need page windows, which the extension cannot do yet.
 - The crawler does not write to the ledger. Its reads appear only through
   `by_crawler`.
+
+## `radar-3`: one posting from any job page
+
+### Why
+
+`radar-1` and `radar-2` read Workday boards. A person also opens single job
+pages all day, on every ATS and on employers' own sites. When they opted in
+(the extension's own switch), the extension tells Aspirely about the posting
+they are looking at, so people with similar titles see it, unless Aspirely
+already has it.
+
+Any signed-in account may send. So every word from the client is untrusted,
+and the rules are in the write path.
+
+### The rules
+
+- **Identity comes from the URL, resolved on the server.** The provider
+  registry (`ats_providers.registry.match_url`) names the vendor. The vendor's
+  `endpoint_from_match` names the board. The registry member
+  (`registry_members`) names the employer. The posting's raw id is read from
+  the URL by the vendor's own `posting_id_from_url`. The body cannot choose a
+  tenant, an employer, an apply link or a `source_job_id`. Fields with those
+  names in the body are never read.
+- **The host decides the vendor.** A fingerprint is a search over the whole
+  URL, so the URL's host must also be one of that vendor's own hosts
+  (`portal_hosts`, `api_hosts`), or the own host of a registry member (a
+  SuccessFactors career site on the employer's domain).
+- **The link is rebuilt.** The stored apply link comes from the member and
+  the id (`posting_links`). SuccessFactors has no builder: its link is the
+  page URL as `https://<host><path>`, with the query and the fragment
+  dropped, and only on the member's own host.
+- **A known board is written through the batch's guarded path**
+  (`_write_rows`: `_decide`, the guard fields, the `origin` label, the
+  ledger). All the batch's guards apply.
+- **Everything else is staged.** It never reaches `job_postings`.
+- **The server makes no outbound request.** See
+  [The open trust gap](#the-open-trust-gap).
+
+### The id, per vendor
+
+`posting_id_from_url(endpoint, url)` exists only where the id in the URL is
+the id the crawl stores. Each reads the path of that vendor's own posting
+page and refuses its listing page and its apply steps.
+
+| Vendor | Posting page | Id | Stored link |
+| --- | --- | --- | --- |
+| `greenhouse` | `(job-)boards(.eu).greenhouse.io/<board>/jobs/<id>` | the number | `https://job-boards(.eu).greenhouse.io/<board>/jobs/<id>` |
+| `lever` | `jobs(.eu).lever.co/<company>/<uuid>` | the uuid | the same, without a query |
+| `ashby` | `jobs.ashbyhq.com/<org>/<uuid>` | the uuid | the same |
+| `smartrecruiters` | `jobs.smartrecruiters.com/<Company>/<id>[-slug]` | the leading number | `https://jobs.smartrecruiters.com/<Company>/<id>` |
+| `workable` | `apply.workable.com/<account>/j/<shortcode>` | the shortcode | `https://apply.workable.com/j/<shortcode>` (the widget's own link) |
+| `neogov` | `www.governmentjobs.com/careers/<agency>/jobs/<id>[/slug]` | the number | `https://www.governmentjobs.com/careers/<agency>/jobs/<id>` |
+| `jobvite` | `jobs.jobvite.com/<company>/job/<id>` | the id | the same |
+| `bamboohr` | `<company>.bamboohr.com/careers/<id>` | the number | the same |
+| `icims` | `<label>.icims.com/jobs/<id>/<slug>/job` | the number | the same, without a query (the slug is the page's own) |
+| `oracle_orc` | `<pod>/hcmUI/CandidateExperience/<lang>/sites/<site>/job/<id>` | the id | the same with `en` |
+| `successfactors` | `<host>/job/<slug>/<id>` | the number | the page URL without its query |
+| `workday` | `{tenant}.wdN.myworkdayjobs.com/[locale/]{site}/job/...` and the `myworkdaysite.com` form | see below | `{apply base}/{site}/job/...`, locale dropped |
+
+**Workday.** The id is the text after the LAST underscore of the last
+`/job/` path segment (`.../Senior-Backend-Engineer_JR1001` gives `JR1001`).
+It can differ from the id the crawl stores. The crawl keys a posting on the
+listing's `bulletFields[0]`, which the URL does not carry, and a reposted
+requisition's path can end `_JR1001-1`. So before a posting is created, the
+server looks for one already stored on the same board under the same
+canonical URL key (`canonical_url_key`, found through the indexed
+`dedupe_group_id`). When there is one, the sighting is treated as that
+posting: it is touched, or given its body. No twin is created. The same
+check runs for every vendor.
+
+**Not supported** (the URL does not carry an id that is provably the crawl's):
+`recruitee` (the URL has a slug, the crawl stores a number), `taleo` (`job=`
+may be the contest number, the crawl stores `jobId`), and every other
+registered vendor (`adp`, `paycom`, `paycor`, `breezy`, `phenom`,
+`eightfold`, `radancy`, `usajobs`, `amazon`, `avature`, `jibe`, own-site
+providers and the rest). Also not read: a Greenhouse or Ashby job embedded in
+a company page (`?gh_jid=`, `?ashby_jid=`: the URL names no board), the
+Workable short link (`apply.workable.com/j/<shortcode>` names no account),
+and the SuccessFactors portal form (`?career_job_req_id=`). Those pages are
+company sites to this route.
+
+### `POST /api/jobs/browser-radar/posting/lookup`
+
+JWT. Body `{"url": "<the posting page URL, at most 2,000 characters>"}`, at
+most 8 KB. Read-only apart from its hourly counter.
+
+```json
+{"supported": true, "vendor": "greenhouse", "known_board": true,
+ "known": true, "job_id": "<32 hex or null>",
+ "want": "nothing"}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `supported` | The URL is a single posting on a vendor with an id rule. When false: `known` is false, `job_id` is null, `want` is `nothing`. |
+| `vendor` | The provider that owns the host, or `""` when none does. It can be named while `supported` is false (a listing page, or a vendor with no id rule). |
+| `known_board` | The board is a registry member. |
+| `known` | A posting with that identity is in `job_postings`. |
+| `job_id` | Its inventory id (`posting_job_id(source, source_job_id)`), when known. |
+| `want` | `nothing`, `sighting` or `body`. |
+
+`want`:
+
+- `body`: we do not hold it, or hold only a teaser, or the board is not in
+  the registry (the posting would be staged).
+- `sighting`: we hold it with a full body and have not seen it for 12 hours,
+  or it is closed for a reason a sighting can undo.
+- `nothing`: seen in the last 12 hours with a full body. Also for an
+  unsupported URL, and for a posting its own page closed (`detail-gone`,
+  `link-dead`), which a sighting cannot reopen.
+
+An account that may not send (ingest off, or not a contributor) is refused
+with 409 or 403 below. It does not get `want: "nothing"`.
+
+### `POST /api/jobs/browser-radar/posting`
+
+JWT. Body at most 300 KB.
+
+```json
+{"url": "...", "title": "...", "company": "...", "location": "...",
+ "description": "<plain text or HTML, at most 200,000 characters>",
+ "date_posted": "<ISO date or empty>", "employment_type": "...",
+ "json_ld": {"@type": "JobPosting"},
+ "client": {"name": "applypilot", "version": "..."}}
+```
+
+`json_ld` is the page's schema.org `JobPosting` object. It is optional and
+at most 100 KB. Any other key in the body is ignored.
+
+Answer 200:
+
+```json
+{"result": "created", "job_id": "<32 hex or null>", "reason": ""}
+```
+
+| `result` | `reason` | When |
+| --- | --- | --- |
+| `created` | | Known board, posting not held. Written new. |
+| `updated` | | Held with a teaser only, and a full body arrived. |
+| `updated` | `reopened` | Held but closed, for a reason a live page can undo. |
+| `touched` | | Held and open. Refreshed as still listed. |
+| `staged` | `unknown_board` | A vendor's posting page for a board the registry lacks. |
+| `staged` | `company_site` | No vendor rule for this page, and `json_ld` is a `JobPosting`. |
+| `ignored` | `closed` | Held, and closed by its own page (`detail-gone`, `link-dead`). |
+| `ignored` | `aged_out` | Not held and too old for the crawl's age rules. |
+| `ignored` | `undated` | Not held, no usable `date_posted`, and this vendor's crawl skips undated rows. |
+| `ignored` | `no_title` | Not held and no title. |
+| `ignored` | `not_a_posting` | The vendor's own host, and not a posting page. |
+| `ignored` | `unsupported` | No vendor rule and no `JobPosting` in `json_ld`. |
+| `ignored` | `rejected` | The inventory refused the write. |
+| `ignored` | `dry_run` | `BROWSER_RADAR_INGEST=dry_run`. See below. |
+
+`job_id` is set for `created`, `updated` and `touched`, and for `ignored` /
+`closed`. It is null otherwise.
+
+**Dry run.** The route validates, resolves and triages, and writes nothing
+to `job_postings` or to staging. The answer is `"result": "ignored",
+"reason": "dry_run"` plus one more key, `would`, holding the `result` that
+`on` would have given. The batch row is written with `mode: "dry_run"`, so
+it is not counted as sent.
+
+#### A known board, posting held
+
+The sighting is rebuilt from what we STORED (`_row_from_stored`), not from
+the body. So it carries our title, link, place, date and employment type.
+Then `_decide` runs, as for a batch:
+
+- held and open: `touch_seen`;
+- held with a teaser, and at least 200 characters of text arrived: the body
+  is added (`body_state: full`), and nothing else changes;
+- a fetched body is never replaced;
+- `detail-gone` and `link-dead` are never reopened;
+- nothing is ever closed.
+
+The age rules are not applied to a held posting. A person looking at an open
+page is the evidence the crawl's 7 day listing window cannot give.
+
+#### A known board, posting not held
+
+It is written through `upsert_posting`, with `origin: "browser"`. The body
+state is `full` when the description holds at least 200 characters of text
+after flattening, else `teaser`. The description is flattened by the same
+helper the Workday batch uses (`flatten_body`). The row is the shape that
+vendor's crawl builds:
+
+- Workday: `_listing_row` as `_list_workday` calls it (the bare path as
+  `detail_ref`, the member's link).
+- Greenhouse (US), Lever (US), Ashby, Workable, NeoGov: `_listing_row` as
+  `_list_career` calls it. That crawl skips a row with no date, so this does
+  too (`ignored` / `undated`).
+- Every other supported vendor: a `RawJob` through `_raw_job_to_listing`,
+  which keeps an undated row, as that crawl does.
+
+Then `_admit_by_age` (7 days, 30 for early career), and requirements read
+the way `_process` reads them (parse reuse, then `_persist_requirements`).
+The employer is the registry member's. The body's `company` is not used.
+
+Fields of a browser-created posting that cannot match a crawled one, and why:
+
+| Field | Why it differs |
+| --- | --- |
+| `title_raw`, `locations`, `employment_type` | The page's wording, as the browser read it. The crawl reads the vendor's API fields (Greenhouse `location.name`, SmartRecruiters `city, region` plus the stated country, Workday `locationsText` and `timeType`). `employment_type` is taken only for vendors whose crawled row has one (Workday, Ashby, NeoGov, iCIMS, Oracle, BambooHR); for the others the crawl stores none and so does this. |
+| description, and so `content_hash`, `description_chars`, `requirements`, `tech`, `seniority`, `work_mode` | The page's text, flattened here. The crawl flattens the vendor's API body with that vendor's converter. Lever's crawl joins four API fields. |
+| `posted_at`, `raw_posted_text`, `posted_at_confidence` | `date_posted` from the page. For Workday the crawl has only relative text ("Posted Today"). A date in the future is dropped. |
+| `compensation` | Never taken from a browser. The crawl reads pay fields from the API. |
+| `canonical_url` | Rebuilt here. Greenhouse's crawl stores the board's `absolute_url`, which can be the employer's own domain (`stripe.com/jobs?gh_jid=`). Lever's stores `hostedUrl`. iCIMS and SuccessFactors keep the page's own slug. Where it differs, `dedupe_group_id` and `canonical_url_key` differ too. |
+| `detail_ref` | Greenhouse (US), Lever, Ashby, NeoGov: none, as their crawl stores. Others: the provider's detail address. |
+| `origin` | `browser`. A crawled posting has none. |
+| `last_ingest_run_id`, miss bookkeeping | Crawl only. |
+
+`source`, `source_job_id`, `job_id`, `employer_id`, `employer_name`, `ats`,
+`tenant`, `industry`, `cost_class`, `source_quality`, `canonical_employer_id`
+and the retention fields are the crawl's own. When the crawl next lists the
+posting it writes the same `(source, source_job_id)` and its fields win.
+
+#### An unknown board, or a company's own site
+
+Never `job_postings`. The posting goes to `browser_radar_staged_postings`,
+keyed by `sha256(normalised URL)[:32]`:
+
+| Field | Meaning |
+| --- | --- |
+| `url`, `host` | The normalised URL (below) and its host. |
+| `vendor`, `tenant`, `site`, `kind` | The server's own reading of the URL. `kind` is `unknown_board` or `company_site`. `vendor` is `""` for a company site. |
+| `title`, `company`, `location` | As the browser said. Untrusted. |
+| `excerpt` | The first 2,000 characters of the flattened description. |
+| `content_hash` | `sha256` of the title and the flattened description, lowercased, whitespace collapsed. |
+| `json_ld` | The page's object when its `@type` is `JobPosting`, else null. Keys Mongo would read as an operator or a path are dropped. |
+| `first_seen_at`, `last_seen_at`, `sightings` | |
+| `reporters` | Up to 50 account pseudonyms (`account_pseudonym`, the helper the fleet uses). Never an email. |
+| `state` | `observed`, then `corroborated`. |
+| `expire_at` | 30 days after the last sighting. |
+
+A page with no vendor rule is staged only when `json_ld` is a `JobPosting`.
+Without one the answer is `ignored` / `unsupported`.
+
+**States.** A posting starts `observed`. A sighting from a DIFFERENT
+pseudonym with the SAME `content_hash` moves it to `corroborated`
+(`corroborated_at`). The same account again does not. Different content does
+not, and it does not rewrite what the first sighting stored. Nothing reads
+this collection into any feed in this change, and nothing promotes a row.
+
+### The URL
+
+Refused (`400 invalid_request`): not `http` or `https`, a user or password
+in it, more than 2,000 characters, characters a URL cannot hold, a path that
+walks upward, and a host that is not public. Not public means: an address
+that is loopback, private, link-local or otherwise not global (IPv4 or
+IPv6), `localhost`, a name with no dot, a numeric or `0x` last label, and
+names under `.local`, `.internal`, `.intranet`, `.lan`, `.home`, `.corp`,
+`.localhost`, `.test`, `.invalid`, `.example`, `.onion`. No DNS is asked.
+
+Kept: scheme, host (lowercased), a port that is not the default, the path,
+and only these query parameters when their value is a plain token: `gh_jid`,
+`ashby_jid`, `jobid`, `job_id`, `job`, `jid`, `reqid`, `req_id`, `id`,
+`career_job_req_id`, `company`, `jk`, `pid`. Everything else in the query is
+dropped (tracking tags, session tokens, candidate ids), and so is the
+fragment. Nothing but the contract's fields is stored. Cookies and other
+page data are never read.
+
+### Refusals and limits
+
+Both routes, in this order, never 401:
+
+| Status | `error` | When |
+| --- | --- | --- |
+| 409 | `ingest_off` | `BROWSER_RADAR_INGEST=off` or `BROWSER_RADAR_ENABLED=0` |
+| 403 | `not_contributor` | the scope is `listed` and the account is not listed |
+| 400 | `invalid_request` | shape, sizes, or the URL rules above |
+| 429 | `rate_limited` | 120 lookups in the clock hour; 60 postings in the clock hour; 300 postings in the UTC day. `retry_after_seconds` and `Retry-After` say when |
+
+Strings past their bound are cut, not refused: `title` 300, `company` 200,
+`location` 300, `employment_type` 80, `date_posted` 40. A `description` over
+200,000 characters, a `json_ld` over 100 KB and a body over 300 KB are
+refused.
+
+Each counter is one atomic `$inc` in `browser_radar_usage`, handed back when
+it went over (the `_rate_limit` idiom). A refused request spends nothing.
+
+### What is recorded
+
+Every answered posting writes one row in `browser_radar_batches` with
+`kind: "posting"`: the account, the mode, one board (`vendor`, `host`,
+`tenant`, `site`), `sent: 1`, the same `response` counters a batch has (plus
+`postings.staged`), and the same `written` ledger (posting id and what was
+done). The page URL is not kept on it. So `uploads/today` and the admin
+table count a single posting like a batch of one.
+
+A refused request leaves no row. It is one log line
+(`radar: posting refused code=... status=...`). An answered one is one log
+line with the result, the vendor and whether the board was known. No URL and
+no email are logged.
+
+### The open trust gap
+
+The server does not fetch the page. It cannot: the reason this feature
+exists is that the server is walled where a browser is not, and a fetch of a
+client's URL would be a new outbound path. So a body is the sender's word.
+What bounds the damage today:
+
+- the employer, the board, the id and the link are the server's, so a false
+  posting still carries a real employer's link to that employer's real page;
+- a fetched body is never replaced, and a held posting keeps its title,
+  link, place and date;
+- a posting its own page closed stays closed;
+- an unknown board or a company page is never shown to anyone;
+- every write is on a ledger row with the account, and a posting a browser
+  created carries `origin: "browser"`, so one account's rows can be found
+  and removed;
+- 300 postings a day an account.
+
+What is still open: on a known board, one account can create a posting with
+invented words under a real employer, or give a teaser an invented body.
+The staged state machine is the path to closing it. `observed` and
+`corroborated` exist now. The next steps are a `verified` state (the crawl
+later lists the posting, or a server fetch through the crawler's own
+allowlisted path agrees), the same states for browser-created rows on known
+boards, and promotion of staged rows only from `corroborated` plus a proven
+board.
+
+### Ops
+
+No new environment variable. The existing switches apply:
+`BROWSER_RADAR_ENABLED`, `BROWSER_RADAR_INGEST` (`off`, `dry_run`, `on`) and
+`BROWSER_RADAR_CONTRIBUTORS_SCOPE`.
+
+1. **Indexes.** The service creates them on first use. They are declared in
+   `browser_radar_service.INDEX_SPECS` and in `scripts/migrate_indexes.py`:
+   `ttl_expire_at`, `radar_staged_state` and `radar_staged_host` on
+   `browser_radar_staged_postings`.
+2. **See what arrived.**
+   `db.browser_radar_batches.find({kind: "posting"}).sort({received_at: -1}).limit(5)`.
+3. **See what is staged.**
+   `db.browser_radar_staged_postings.find({state: "corroborated"}, {url: 1, title: 1, sightings: 1})`.
+   Or the `staged_*` keys of `GET /api/admin/ops/browser-radar`.
+4. **Remove one account's rows.** Its batch rows list the posting ids under
+   `written`. Rows with `did: "created"` and `origin: "browser"` on the
+   posting are the ones it made.
+5. **Dropping `browser_radar_staged_postings`** removes the staged postings
+   and nothing else.

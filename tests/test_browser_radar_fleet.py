@@ -6,7 +6,8 @@ part that shares the work out (docs/specs/browser-radar.md, section
 
 * one ledger row per registry board, never shrunk by a failed registry read;
 * a board is leased to one browser at a time, by one guarded write;
-* a termless upload is a read of the board, a title search is not;
+* a termless upload is a read of the board only from the account that holds
+  its lease, and a title search never is;
 * challenges park a board and, across accounts, pause the fleet;
 * the coverage number is a stored snapshot served with its age.
 
@@ -15,6 +16,7 @@ Everything runs on mongomock through the shared fixtures.
 import json
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -122,6 +124,17 @@ def _batch(boards, reads=None):
     return body
 
 
+def _lease(db, email, *tenants, at=NOW, minutes=fleet.LEASE_MINUTES, site="external"):
+    """Give `email` the lease on these boards as of `at`, as a claim would.
+    For tests that need one named board held, whatever the claim order is."""
+    for tenant in tenants:
+        res = db[radar.LEASES].update_one(
+            {"_id": _key(tenant, site)},
+            {"$set": {"lease": {"id": uuid.uuid4().hex, "by": fleet.account_pseudonym(email),
+                                "until": at + timedelta(minutes=minutes), "at": at}}})
+        assert res.matched_count == 1, tenant
+
+
 def _seed_postings(db, rows):
     """`rows`: (tenant, how many active postings, newest last_seen_at)."""
     docs = []
@@ -218,6 +231,7 @@ class TestLedger:
         registry["members"] = [_member(t) for t in TENANTS] + [
             _member(f"extra{i}") for i in range(32)]
         _sync()
+        _lease(db, A, "extra0")
         radar.ingest_batch(A, _batch([_board("extra0", [_posting("JR1")])]), now=NOW)
         read_at = _row(db, "extra0")["last_read_at"]
         assert read_at is not None
@@ -463,23 +477,83 @@ class TestUploads:
         assert tenant not in _tenants(_claim(B, 12, at + timedelta(hours=23)))
         assert _tenants(_claim(C, 12, at + timedelta(hours=25)))[-1] == tenant   # the newest read is last
 
-    def test_a_read_counts_whoever_held_the_lease(self, db):
+    def test_a_read_from_an_account_that_does_not_hold_the_lease_is_not_a_read(self, db):
+        """Any account could once mark every board read without reading one,
+        and inflate `by_browser`. Its postings are still ingested."""
+        _sync()
+        task = _claim(A, 1)["tasks"][0]
+        tenant = task["tenant"]
+        at = NOW + timedelta(minutes=10)
+        out = radar.ingest_batch(B, _batch([_board(tenant, [_posting("JR1")])]), now=at)
+        assert out["postings"]["created"] == 1           # ingested as before
+        row = _row(db, tenant)
+        assert row["lease"]["id"] == task["lease_id"]    # A still holds it
+        assert row["last_read_at"] is None and row["last_read_by"] is None
+        assert row["last_result"] is None and _aware(row["due_at"]) == fleet.EPOCH
+        assert _aware(row["last_seen_unleased_at"]) == at
+        assert row["last_unleased_postings"] == 1
+        # And the holder's own read still completes it afterwards.
+        radar.ingest_batch(A, _batch([_board(tenant, [_posting("JR1")])]),
+                           now=at + timedelta(minutes=1))
+        row = _row(db, tenant)
+        assert row["lease"] is None and row["last_read_by"] == fleet.account_pseudonym(A)
+
+    def test_a_read_of_a_board_nobody_holds_is_not_a_read(self, db):
+        """A `radar-1` client's `stale` task carries no lease."""
+        _sync()
+        radar.ingest_batch(A, _batch([_board("acme", [_posting("JR1")]), _board("beta")]),
+                           now=NOW)
+        for tenant in ("acme", "beta"):
+            row = _row(db, tenant)
+            assert row["last_read_at"] is None and _aware(row["due_at"]) == fleet.EPOCH
+            assert _aware(row["last_seen_unleased_at"]) == NOW
+        assert "acme" in _tenants(_claim(B, 12))         # still due, still handed out
+
+    def test_a_lease_that_lapsed_inside_the_grace_still_completes(self, db):
         _sync()
         tenant = _claim(A, 1)["tasks"][0]["tenant"]
-        radar.ingest_batch(B, _batch([_board(tenant, [_posting("JR1")])]), now=NOW)
+        at = NOW + timedelta(minutes=fleet.LEASE_MINUTES + fleet.LEASE_GRACE_MINUTES - 1)
+        radar.ingest_batch(A, _batch([_board(tenant, [_posting("JR1")])]), now=at)
         row = _row(db, tenant)
-        assert row["lease"] is None and row["last_read_by"] == fleet.account_pseudonym(B)
+        assert row["lease"] is None and _aware(row["last_read_at"]) == at
+        assert row["last_read_by"] == fleet.account_pseudonym(A)
+        assert "last_seen_unleased_at" not in row
+
+    def test_a_lease_that_lapsed_beyond_the_grace_does_not_complete(self, db):
+        _sync()
+        tenant = _claim(A, 1)["tasks"][0]["tenant"]
+        at = NOW + timedelta(minutes=fleet.LEASE_MINUTES + fleet.LEASE_GRACE_MINUTES + 1)
+        radar.ingest_batch(A, _batch([_board(tenant, [_posting("JR1")])]), now=at)
+        row = _row(db, tenant)
+        assert row["last_read_at"] is None and _aware(row["due_at"]) == fleet.EPOCH
+        assert _aware(row["last_seen_unleased_at"]) == at
+
+    def test_a_lapsed_lease_another_account_took_is_theirs(self, db):
+        """Inside the grace, but the board was claimed again: the first
+        holder's late upload no longer counts."""
+        _first(db, "acme")
+        _sync()
+        assert _claim(A, 1)["tasks"][0]["tenant"] == "acme"
+        later = NOW + timedelta(minutes=fleet.LEASE_MINUTES + 5)
+        task = _claim(B, 1, later)["tasks"][0]
+        assert task["tenant"] == "acme"
+        radar.ingest_batch(A, _batch([_board("acme", [_posting("JR1")])]),
+                           now=later + timedelta(minutes=1))
+        row = _row(db, "acme")
+        assert row["lease"]["id"] == task["lease_id"] and row["last_read_at"] is None
 
     def test_a_large_board_is_due_sooner_but_never_under_the_floor(self, db, monkeypatch):
         _seed_postings(db, [("acme", 2000, NOW - timedelta(days=2))])
         _sync()
         assert _row(db, "acme")["boost"] == fleet.BOOST_MAX
+        _lease(db, A, "acme", "beta")
         radar.ingest_batch(A, _batch([_board("acme", [_posting("JR1")]),
                                       _board("beta", [_posting("JR2")])]), now=NOW)
         assert _aware(_row(db, "acme")["due_at"]) == NOW + timedelta(hours=6)
         assert _aware(_row(db, "beta")["due_at"]) == NOW + timedelta(hours=24)
         monkeypatch.setenv("BROWSER_RADAR_TARGET_HOURS", "1")       # clamped to 3
         assert fleet.target_hours() == 3.0
+        _lease(db, A, "acme")
         radar.ingest_batch(A, _batch([_board("acme", [_posting("JR1")])]), now=NOW)
         assert _aware(_row(db, "acme")["due_at"]) == NOW + timedelta(hours=3)
         monkeypatch.setenv("BROWSER_RADAR_TARGET_HOURS", "500")     # clamped to 72
@@ -510,13 +584,18 @@ class TestUploads:
         assert row["lease"] is None and _aware(row["last_read_at"]) == NOW
         assert _aware(row["due_at"]) == NOW + timedelta(hours=24)
 
-    def test_a_read_before_the_first_sync_makes_the_row(self, db):
+    def test_an_upload_before_the_first_sync_makes_the_row_unread(self, db):
+        """No row means no lease, so this is not a read. The row is made as
+        the sync would make it: never read, due at once."""
         radar.ingest_batch(A, _batch([_board("acme", [_posting("JR1")])]), now=NOW)
         row = _row(db, "acme")
-        assert row["in_registry"] is True and row["last_result"] == "ok"
+        assert row["in_registry"] is True and row["last_result"] is None
+        assert row["last_read_at"] is None and _aware(row["due_at"]) == fleet.EPOCH
+        assert _aware(row["last_seen_unleased_at"]) == NOW
         assert (row["tenant"], row["site"], row["employer"]) == ("acme", "External", "Acme Corp")
         assert _sync()["added"] == len(TENANTS) - 1
-        assert _aware(_row(db, "acme")["last_read_at"]) == NOW
+        assert _row(db, "acme")["last_read_at"] is None
+        assert "acme" in _tenants(_claim(B, 12))
 
     def test_an_unknown_board_is_never_a_ledger_row(self, db):
         _sync()
@@ -534,8 +613,10 @@ class TestUploads:
 
     def test_a_repeated_batch_is_counted_once(self, db):
         _sync()
+        _lease(db, A, "acme")
         body = _batch([_board("acme", [_posting("JR1")])])
         radar.ingest_batch(A, body, now=NOW)
+        _lease(db, A, "acme", at=NOW + timedelta(hours=2))
         radar.ingest_batch(A, body, now=NOW + timedelta(hours=2))
         assert _aware(_row(db, "acme")["last_read_at"]) == NOW
 
@@ -765,8 +846,13 @@ class TestCoverage:
                             ("stranger", 9, fresh)])
         _sync(NOW - timedelta(hours=3))
         # Browsers read acme and beta inside the window, eta before it.
+        _lease(db, A, "eta", at=NOW - timedelta(hours=30))
         radar.ingest_batch(A, _batch([_board("eta")]), now=NOW - timedelta(hours=30))
+        _lease(db, A, "acme", "beta", at=NOW - timedelta(hours=1))
         radar.ingest_batch(A, _batch([_board("acme"), _board("beta")]),
+                           now=NOW - timedelta(hours=1))
+        # An account that holds no lease read gamma and delta: not coverage.
+        radar.ingest_batch(C, _batch([_board("gamma"), _board("delta")]),
                            now=NOW - timedelta(hours=1))
         radar.ingest_batch(B, _batch([_board("theta", [_posting("JR5")], "sre")]),
                            now=NOW - timedelta(hours=1))       # a search: not a read
@@ -796,6 +882,7 @@ class TestCoverage:
         second = dict(_member("acme", "Careers"), member_key="workday-acme-careers")
         registry["members"] = [_member("acme"), second, _member("beta")]
         _sync()
+        _lease(db, A, "acme", site="careers")
         radar.ingest_batch(A, _batch([_board("acme", site="Careers")]), now=NOW)
         fleet.run_coverage(now=NOW)
         snap = db[radar.COVERAGE].find_one({})
@@ -847,6 +934,7 @@ class TestCoverage:
 
     def test_coverage_block_serves_the_newest_with_its_age(self, db):
         fleet.run_coverage(now=NOW - timedelta(hours=5))
+        _lease(db, A, "acme", at=NOW - timedelta(hours=1))
         radar.ingest_batch(A, _batch([_board("acme")]), now=NOW - timedelta(hours=1))
         fleet.run_coverage(now=NOW - timedelta(minutes=30))
         block = fleet.coverage_block(now=NOW)
@@ -1016,6 +1104,7 @@ class TestRoutes:
         _sync(datetime.now(timezone.utc))
         task = _call(app, A, CLAIMS, json={"limit": 1}).get_json()["tasks"][0]
         gone = {k: task[k] for k in ("tenant", "site", "wd_host", "domain")}
+        _lease(db, A, "theta", at=datetime.now(timezone.utc))
         r = _call(app, A, "/api/jobs/browser-radar/listings",
                   json=_batch([_board("theta")], reads=[dict(gone, result="gone")]))
         assert r.status_code == 200
@@ -1036,7 +1125,7 @@ class TestWiring:
         assert due["key"] == [("in_registry", 1), ("due_at", 1), ("rank", 1),
                               ("parked_until", 1)]
         assert db[radar.LEASES].index_information()["radar_board_lease_id"]["sparse"] is True
-        for name in (radar.COVERAGE, radar.FLEET, radar.BATCHES, radar.USAGE):
+        for name in (radar.COVERAGE, radar.FLEET, radar.BATCHES, radar.USAGE, radar.STAGED):
             ttl = db[name].index_information()["ttl_expire_at"]
             assert ttl["expireAfterSeconds"] == 0 and ttl["key"] == [("expire_at", 1)]
         assert db[radar.COVERAGE].index_information()["radar_coverage_recent"]["key"] == [
@@ -1064,7 +1153,7 @@ class TestWiring:
         declared = [s for s in mi.INDEX_SPECS if s[0].startswith("browser_radar_")]
         assert shape(declared) == shape(radar.INDEX_SPECS)
         assert {s[0] for s in declared} == {radar.BATCHES, radar.USAGE, radar.LEASES,
-                                            radar.COVERAGE, radar.FLEET}
+                                            radar.COVERAGE, radar.FLEET, radar.STAGED}
 
     def test_the_worker_schedules_radar_coverage(self, monkeypatch):
         import importlib.util

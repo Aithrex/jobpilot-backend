@@ -42,14 +42,14 @@ endpoint, or a transient Oracle outage would wipe the catalog.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from services.ats_providers.base import (DATE_EXACT, STATUS_BLOCKED,
                                          STATUS_DEAD, STATUS_EMPTY,
                                          STATUS_VALIDATED, AtsProvider,
                                          ChallengeError, CrawlPolicy, Endpoint,
                                          FetchContext, RawJob,
-                                         ValidationResult, fp)
+                                         ValidationResult, fp, url_parts)
 from services.ats_providers.registry import register
 
 # ORC pods are all under oraclecloud.com, but customers routinely CNAME a vanity
@@ -164,6 +164,33 @@ class OracleOrcProvider(AtsProvider):
                 f"/recruitingCEJobRequisitions")
 
     # -- listing -------------------------------------------------------------
+
+    # -- one posting, from its own page URL (`radar-3`) ------------------------
+
+    def posting_id_from_url(self, endpoint: Endpoint, url: str) -> str:
+        """`<pod>/hcmUI/CandidateExperience/<lang>/sites/<site>/job/<id>`: the
+        id is the requisition `Id` the REST listing returns.
+        `/job/<id>/apply/...` is the form."""
+        host, segments, _query = url_parts(url)
+        if host != self._host_of(endpoint) or len(segments) != 7:
+            return ""
+        lowered = [seg.lower() for seg in segments]
+        if lowered[0] != "hcmui" or lowered[1] != "candidateexperience" \
+                or lowered[3] != "sites" or lowered[5] != "job":
+            return ""
+        if segments[4].lower() != self._site_of(endpoint).lower():
+            return ""
+        return segments[6] if re.fullmatch(r"[A-Za-z0-9_\-]{1,40}", segments[6]) else ""
+
+    def posting_links(self, endpoint: Endpoint, raw_id: str,
+                      url: str) -> Tuple[str, str]:
+        host = self._host_of(endpoint)
+        if not raw_id or not host or host.startswith("."):
+            return "", ""
+        return (f"https://{host}/hcmUI/CandidateExperience/en/sites/"
+                f"{self._site_of(endpoint)}/job/{raw_id}",
+                f"https://{host}/hcmRestApi/resources/latest"
+                f"/recruitingCEJobRequisitionDetails")
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
