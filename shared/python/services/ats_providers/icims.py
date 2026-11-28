@@ -52,7 +52,7 @@ from services.ats_providers.base import (DATE_EXACT, DATE_UNKNOWN,
                                          AtsProvider, ChallengeError,
                                          CrawlPolicy, Endpoint, FetchContext,
                                          PortalMovedError, RawJob,
-                                         ValidationResult, fp)
+                                         ValidationResult, fp, url_parts)
 from services.ats_providers.registry import register
 from services.ats_providers.util import (html_to_text, looks_minted_now,
                                          looks_remote, to_iso)
@@ -283,6 +283,34 @@ class IcimsProvider(AtsProvider):
         if dest.startswith("//"):
             dest = "https:" + dest
         return dest[:400]
+
+    # -- one posting, from its own page URL (`radar-3`) ------------------------
+
+    def posting_id_from_url(self, endpoint: Endpoint, url: str) -> str:
+        """`<label>.icims.com/jobs/<id>/<slug>/job`: the number is the id the
+        listing's own links carry (`_JOB_HREF_RE`). `/jobs/<id>/login` and the
+        later apply steps are not the posting."""
+        host, segments, _query = url_parts(url)
+        if host != self._host_of(endpoint) or len(segments) != 4:
+            return ""
+        if segments[0].lower() != "jobs" or segments[3].lower() != "job":
+            return ""
+        return segments[1] if re.fullmatch(r"\d{1,12}", segments[1]) else ""
+
+    def posting_links(self, endpoint: Endpoint, raw_id: str,
+                      url: str) -> Tuple[str, str]:
+        """The listing mints `<base>/jobs/<id>/<slug>/job` and the slug is not
+        derivable from the id, so it is taken from the page URL's own path
+        (and only when it is a plain slug)."""
+        host, segments, _query = url_parts(url)
+        own = self._host_of(endpoint)
+        if not raw_id or not own or host != own or len(segments) != 4:
+            return "", ""
+        slug = segments[2]
+        if segments[1] != raw_id or not re.fullmatch(r"[A-Za-z0-9%._~\-]{1,200}", slug):
+            return "", ""
+        page = f"https://{own}/jobs/{raw_id}/{slug}/job"
+        return page, page
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:

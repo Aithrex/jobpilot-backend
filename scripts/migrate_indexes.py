@@ -1196,6 +1196,14 @@ INDEX_SPECS = [
      {"expireAfterSeconds": 0, "name": "ttl_expire_at"}),
     ("browser_radar_fleet", [("expire_at", ASCENDING)],
      {"expireAfterSeconds": 0, "name": "ttl_expire_at"}),
+    # Single postings the registry cannot place (`radar-3`): kept 30 days past
+    # the last sighting. Admin counts read `state` and group by `host`.
+    ("browser_radar_staged_postings", [("expire_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expire_at"}),
+    ("browser_radar_staged_postings", [("state", ASCENDING)],
+     {"name": "radar_staged_state"}),
+    ("browser_radar_staged_postings", [("host", ASCENDING)],
+     {"name": "radar_staged_host"}),
 
 ]
 

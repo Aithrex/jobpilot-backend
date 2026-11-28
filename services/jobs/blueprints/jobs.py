@@ -969,6 +969,58 @@ def browser_radar_claims_release():
         return jsonify({"error": "Failed to release the leases"}), 500
 
 
+# `radar-3`: one posting from any job page (services/browser_radar_posting.py).
+# Identity comes from the URL, resolved on the server; the server fetches
+# nothing. Refusals are 409/403/400/429, never 401.
+
+def _radar_sized_body(limit, message):
+    """The request's JSON, or a 400 answer when the body is over `limit`."""
+    raw = request.get_data(cache=True) or b""
+    if (request.content_length or 0) > limit or len(raw) > limit:
+        return None, (jsonify({"error": "invalid_request", "message": message}), 400)
+    return request.get_json(silent=True), None
+
+
+@jobs_bp.route("/browser-radar/posting/lookup", methods=["POST"])
+@jwt_required()
+def browser_radar_posting_lookup():
+    """Do we already hold the posting this page URL shows (`radar-3`)."""
+    from services import browser_radar_posting as posting
+    from services import browser_radar_service as radar
+
+    data, refused = _radar_sized_body(posting.MAX_LOOKUP_BYTES, "The body is too large.")
+    if refused is not None:
+        return refused
+    try:
+        return jsonify(posting.lookup_posting(get_jwt_identity(), data)), 200
+    except radar.RadarError as e:
+        return _radar_refusal(e)
+    except Exception as e:
+        logger.error(f"Browser radar lookup error: {type(e).__name__}: {e}")
+        return jsonify({"error": "Failed to look the posting up"}), 500
+
+
+@jobs_bp.route("/browser-radar/posting", methods=["POST"])
+@jwt_required()
+def browser_radar_posting():
+    """One posting a browser read on its own job page (`radar-3`)."""
+    from services import browser_radar_posting as posting
+    from services import browser_radar_service as radar
+
+    data, refused = _radar_sized_body(posting.MAX_BODY_BYTES, "The posting is over 300 KB.")
+    if refused is not None:
+        return refused
+    try:
+        return jsonify(posting.ingest_posting(get_jwt_identity(), data)), 200
+    except radar.RadarError as e:
+        # A refusal leaves no row, so this line is its only trace.
+        logger.info("radar: posting refused code=%s status=%s", e.code, e.status)
+        return _radar_refusal(e)
+    except Exception as e:
+        logger.error(f"Browser radar posting error: {type(e).__name__}: {e}")
+        return jsonify({"error": "Failed to record the posting"}), 500
+
+
 # ------------------------------------------------------------------
 # Career Pages tab — direct fan-out across companies' OWN career sites
 # (Greenhouse/Lever/Ashby/SmartRecruiters/Workable/Recruitee public JSON

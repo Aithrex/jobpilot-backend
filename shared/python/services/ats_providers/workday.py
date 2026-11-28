@@ -487,6 +487,52 @@ class WorkdayProvider(AtsProvider):
             extra={"external_path": path} if path else {},
         )
 
+    # -- one posting, from its own page URL (Browser Radar `radar-3`) ---------
+
+    def posting_path_from_url(self, endpoint: Endpoint, url: str) -> str:
+        """The `externalPath` (without its leading slash) of the posting a
+        candidate-facing URL shows: `{apply_base}/[locale/]{site}/job/...`.
+        "" for another board's URL, the search page, or an apply step."""
+        clean = str(url or "").split("#", 1)[0].split("?", 1)[0]
+        site = self._site_of(endpoint)
+        m = re.match(re.escape(self._apply_base(endpoint)) + r"/(?:[a-z]{2}-[a-z]{2}/)?"
+                     + re.escape(site) + r"/(job/.+)$", clean, re.IGNORECASE)
+        path = (m.group(1) if m else "").strip("/")
+        if not path or ".." in path or not re.fullmatch(r"job/[^\s?#\\]{1,480}", path):
+            return ""
+        last = path.rsplit("/", 1)[-1].lower()
+        if last in ("apply", "login", "userhome") or "/apply/" in f"/{path.lower()}/":
+            return ""
+        return path
+
+    def posting_id_from_url(self, endpoint: Endpoint, url: str) -> str:
+        """The requisition id a Workday posting URL ends with: the text after
+        the LAST underscore of the last `/job/` path segment
+        (`/job/US-CA-Santa-Clara/Senior-Backend-Engineer_JR1001` -> `JR1001`).
+
+        This is NOT guaranteed to be the id the crawl stores. The crawl keys
+        a posting on the listing's `bulletFields[0]`, which the URL does not
+        carry, and a reposted requisition's path can end `_JR1001-1`. So the
+        caller must also look for a posting already stored under the same
+        canonical URL before it treats this id as a new posting."""
+        path = self.posting_path_from_url(endpoint, url)
+        last = path.rsplit("/", 1)[-1] if path else ""
+        if "_" not in last:
+            return ""
+        req = last.rsplit("_", 1)[-1]
+        return req if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.\-]{0,79}", req) else ""
+
+    def posting_links(self, endpoint: Endpoint, raw_id: str,
+                      url: str) -> Tuple[str, str]:
+        """The apply link and CXS detail URL `_to_raw` mints, rebuilt from the
+        board and the URL's own `/job/...` path (the locale segment dropped)."""
+        path = self.posting_path_from_url(endpoint, url)
+        if not path:
+            return "", ""
+        site = self._site_of(endpoint)
+        return (f"{self._apply_base(endpoint)}/{site}/{path}",
+                f"{self._base(endpoint)}/wday/cxs/{endpoint.tenant}/{site}/{path}")
+
     # -- detail --------------------------------------------------------------
 
     def detail_ref_from_apply_url(self, endpoint: Endpoint, apply_url: str) -> str:

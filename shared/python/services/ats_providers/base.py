@@ -453,6 +453,25 @@ _INFRA_TENANT_RE = re.compile(
     rf"|(?:^|[-_.])(?:{_INFRA_WORDS})[-_.])")
 
 
+def url_parts(url: Any) -> Tuple[str, List[str], Dict[str, str]]:
+    """`(host, path segments, query)` of a URL, for `posting_id_from_url`.
+
+    The host is lowercased. Empty path segments are dropped. The query keeps
+    the first value of each name, with the name lowercased."""
+    from urllib.parse import parse_qsl, urlsplit
+
+    try:
+        parts = urlsplit(str(url or "").strip())
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        return "", [], {}
+    segments = [seg for seg in (parts.path or "").split("/") if seg]
+    query: Dict[str, str] = {}
+    for name, value in parse_qsl(parts.query or "", keep_blank_values=False):
+        query.setdefault(name.lower(), value)
+    return host, segments, query
+
+
 class AtsProvider:
     """Base class for every ATS vendor plugin.
 
@@ -535,6 +554,31 @@ class AtsProvider:
         the detail is addressed by the posting's id. Used only for postings
         stored before `detail_ref` was kept (`job_ingest_worker._owed_backlog`)."""
         return ""
+
+    # -- one posting, from its own page URL (Browser Radar `radar-3`) ---------
+
+    def posting_id_from_url(self, endpoint: "Endpoint", url: str) -> str:
+        """The raw id `list_jobs` emits for the ONE posting this page URL
+        shows, or "" when the URL is not a single posting of this board.
+
+        Implemented only where the id in the URL IS the id the crawl stores,
+        so a posting a browser reports and the same posting the crawl lists
+        get one `source_job_id`. A vendor whose URL carries another id (a
+        slug, a requisition number the listing does not print) leaves this
+        alone: "" means the server cannot name the posting, never a guess.
+
+        `url` is already reduced by the caller to scheme, host, path and the
+        few query parameters that name a job. The host belongs to this vendor
+        or to the registry member, so this reads the PATH and nothing else.
+        """
+        return ""
+
+    def posting_links(self, endpoint: "Endpoint", raw_id: str,
+                      url: str) -> Tuple[str, str]:
+        """`(apply_url, detail_url)` as `list_jobs` mints them for `raw_id`,
+        rebuilt from the endpoint and the id. `("", "")` when this vendor has
+        no builder: the caller then keeps the page URL without its query."""
+        return "", ""
 
     def board_url(self, endpoint: "Endpoint") -> str:
         """The PUBLIC board page for this endpoint, or "" when it is not

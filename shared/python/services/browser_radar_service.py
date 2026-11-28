@@ -21,8 +21,10 @@ Rules this module keeps (the contract is `radar-1`, written down in
 `docs/specs/browser-radar.md`):
 
 * **The server re-derives everything.** The browser sends Workday's raw CXS
-  fields; `WorkdayProvider._to_raw` and the crawler's `_raw_job_to_listing`
-  map them, so a browser sighting and a crawler sighting are the same row.
+  fields. `workday_row` maps them the way the PRODUCTION crawl does
+  (`job_ingest_worker._list_workday`, the legacy listing path Workday is
+  pinned to), so a browser sighting and a crawler sighting are the same row.
+  A test drives the real crawl path and compares the stored documents.
 * **Only boards the crawler already knows are written.** A board must resolve
   to a member of `registry_members("workday")`. Anything else is recorded in
   `browser_radar_unknown_boards` for discovery and never reaches
@@ -46,13 +48,19 @@ time (`POST .../claims`), and counts a termless read of a known board as a
 read of that board. This module calls it in three places: the plan says
 `claims: true` when the account can claim, a written batch completes leases
 (`ingest_batch`), and the admin payload carries `coverage` and `fleet`.
-`radar-1` clients are unchanged.
+`radar-1` clients are unchanged, except that a termless read counts as a read
+of the board only from the account that holds the board's lease.
 
-The crawler does not depend on any of this. Dropping the six collections
+`radar-3` adds one posting from any job page, in `browser_radar_posting.py`
+(`POST .../posting/lookup` and `POST .../posting`). It reuses this module's
+gates, `_decide`, the guard fields and `_write_rows`, so a single posting is
+written under exactly the rules a batch is.
+
+The crawler does not depend on any of this. Dropping the seven collections
 (`browser_radar_batches`, `browser_radar_usage`,
 `browser_radar_unknown_boards`, `browser_radar_board_leases`,
-`browser_radar_coverage_snapshots`, `browser_radar_fleet`) removes the
-feature's state and nothing else.
+`browser_radar_coverage_snapshots`, `browser_radar_fleet`,
+`browser_radar_staged_postings`) removes the feature's state and nothing else.
 """
 from __future__ import annotations
 
@@ -81,6 +89,8 @@ UNKNOWN_BOARDS = "browser_radar_unknown_boards"
 LEASES = "browser_radar_board_leases"
 COVERAGE = "browser_radar_coverage_snapshots"
 FLEET = "browser_radar_fleet"
+# `radar-3` (browser_radar_posting.py): postings the registry cannot place.
+STAGED = "browser_radar_staged_postings"
 
 #: What the plan suggests. The extension clamps these to its own hard caps,
 #: so the server can only ever LOWER what a browser does.
@@ -123,9 +133,14 @@ ORIGIN_BROWSER = "browser"
 #: requisition is not proof against them (boards keep dead rows listed), and
 #: the body a browser sends is the sender's word, so neither reopens one.
 NO_REOPEN_REASONS = frozenset({"detail-gone", "link-dead"})
-#: `_detail_via_provider` keeps this much of a fetched body; the browser path
-#: keeps exactly as much.
+#: The crawl keeps this much of a fetched body (`fetch_detail`); the browser
+#: path keeps exactly as much.
 DETAIL_KEEP_CHARS = 15000
+#: A batch's own `observed_at` is the clock its relative dates ("Posted 3 Days
+#: Ago") are read against, when it is not in the future and not older than
+#: this. A parked batch can arrive a day late. Outside the bound the server
+#: clock is used; nothing is refused for it.
+OBSERVED_AT_MAX_AGE_DAYS = 7
 
 # The admin set `services/auth/blueprints/admin.py` reads. Copied rather than
 # imported: the jobs service must not import the auth blueprint.
@@ -237,6 +252,11 @@ INDEX_SPECS = (
     (COVERAGE, [("measured_at", -1)], {"name": "radar_coverage_recent"}),
     (COVERAGE, [("expire_at", 1)], _TTL),
     (FLEET, [("expire_at", 1)], _TTL),
+    # `radar-3`: staged postings live 30 days past their last sighting. The
+    # admin counts read `state`, and the top hosts read `host`.
+    (STAGED, [("expire_at", 1)], _TTL),
+    (STAGED, [("state", 1)], {"name": "radar_staged_state"}),
+    (STAGED, [("host", 1)], {"name": "radar_staged_host"}),
 )
 
 
@@ -529,15 +549,11 @@ def _clean_detail(raw: Any) -> Optional[Dict[str, Any]]:
         return None
     if isinstance(body, str) and len(body) > MAX_DESCRIPTION_CHARS:
         raise _invalid(f"a jobDescription is over {MAX_DESCRIPTION_CHARS} characters")
+    # Only the body is read. The production crawl reads nothing else from a
+    # Workday detail (`fetch_detail`): not `startDate`, not `location`.
     return {
         "externalPath": path.strip(),
-        "jobPostingInfo": {
-            "title": _text(info.get("title"), 300),
-            "jobDescription": body or "",
-            "location": _text(info.get("location"), 300),
-            "timeType": _text(info.get("timeType"), 80),
-            "startDate": _text(info.get("startDate"), 40),
-        },
+        "jobPostingInfo": {"jobDescription": body or ""},
     }
 
 
@@ -658,55 +674,111 @@ def _rate_limit(db, email: str, postings: int, now: datetime) -> None:
 # Mapping: Workday's raw fields -> the crawler's rows
 # ---------------------------------------------------------------------------
 
-class _DetailContext:
-    """A FetchContext stand-in that answers the provider's one detail GET with
-    what the browser already read. The provider code runs unchanged."""
-
-    def __init__(self, payload: Dict[str, Any]) -> None:
-        self._payload = payload
-
-    def get_json(self, url: str, **_kw: Any) -> Tuple[int, Dict[str, Any]]:
-        return 200, self._payload
-
-    def get_text(self, url: str, **_kw: Any) -> Tuple[int, str]:  # pragma: no cover
-        return 404, ""
-
-    def should_stop(self) -> bool:  # pragma: no cover
-        return False
+_SCRIPT_BLOCK_RE = re.compile(r"<(script|style|noscript)\b[^>]*>.*?</\1\s*>",
+                              re.IGNORECASE | re.DOTALL)
 
 
-def map_posting(member: Dict[str, Any], posting: Dict[str, Any]) -> Any:
-    """`WorkdayProvider._to_raw` over one browser posting (a RawJob or None)."""
+def flatten_body(html: Any) -> str:
+    """A posting body as the plain text the crawl stores.
+
+    The converter is the crawl's own (`workday_cxs_fetcher._detail_html_to_text`,
+    the one `fetch_detail` runs on a Workday `jobDescription`), cut to the same
+    length, so the same body gives the same text, the same `content_hash` and
+    the same requirements whichever side read it.
+
+    One deliberate difference: `<script>`, `<style>` and `<noscript>` blocks
+    are removed first. Workday's own bodies never hold one, so a real body is
+    unchanged; a hostile sender's script text is not stored as prose."""
+    from services.workday_cxs_fetcher import _detail_html_to_text
+
+    raw = str(html or "")
+    if not raw:
+        return ""
+    return _detail_html_to_text(_SCRIPT_BLOCK_RE.sub(" ", raw))[:DETAIL_KEEP_CHARS]
+
+
+def batch_clock(observed_at: Any, now: datetime) -> datetime:
+    """The instant a batch's relative dates are read against.
+
+    The batch's own `observed_at`, when it parses, is not in the future and
+    is at most `OBSERVED_AT_MAX_AGE_DAYS` old. Otherwise the server clock."""
+    w = _worker()
+    seen = w._parse_iso(observed_at) if isinstance(observed_at, str) and observed_at else None
+    if seen is None or seen > now or seen < now - timedelta(days=OBSERVED_AT_MAX_AGE_DAYS):
+        return now
+    return seen.astimezone(timezone.utc)
+
+
+def _workday_apply_base(member: Dict[str, Any]) -> Tuple[str, str]:
+    """`(apply base, site)` for a Workday member.
+
+    On `myworkdayjobs.com` this is the string `_list_workday` builds, from
+    the member's own fields. That path cannot read a `myworkdaysite.com`
+    board at all, so there the provider's form is used: such a board's rows
+    can only ever come from a browser."""
     w = _worker()
     provider = _provider()
     endpoint = w._endpoint_from_member(member)
-    base = provider._base(endpoint)
-    site = provider._site_of(endpoint)
-    return provider._to_raw(endpoint, base, site, posting)
+    if provider._domain_of(endpoint) == _DOMAINS[0]:
+        tenant = str(member.get("tenant") or endpoint.tenant)
+        host = str(member.get("wd_host") or provider._wd_host_of(endpoint))
+        site = str(member.get("site") or provider._site_of(endpoint))
+        return f"https://{tenant}.{host}.{_DOMAINS[0]}", site
+    return provider._apply_base(endpoint), provider._site_of(endpoint)
 
 
-def _apply_detail(member: Dict[str, Any], row: Dict[str, Any], job: Any,
-                  detail: Dict[str, Any]) -> str:
-    """Run `WorkdayProvider.fetch_detail` on the browser's detail payload and
-    adopt it the way `_detail_via_provider` does. Returns the body ("" when
-    the detail carried none)."""
+def workday_row(member: Dict[str, Any], posting: Dict[str, Any], *,
+                cutoff: datetime, clock: datetime,
+                now: datetime) -> Tuple[Optional[Dict[str, Any]], str]:
+    """One raw CXS posting as the listing row the PRODUCTION crawl builds.
+
+    This mirrors the loop body of `job_ingest_worker._list_workday` line for
+    line (Workday is in `_LEGACY_LISTING_VENDORS`, so that is the path the
+    crawl runs): the same relative-date reader, the same skip of a row with
+    no readable date, the same requisition id, apply link and bare-path
+    detail address, through the same `_listing_row`.
+    `test_browser_row_equals_the_crawler_row` drives the real function and
+    holds the two equal.
+
+    Returns `(row, "")`, or `(None, why)` with `why` one of `untitled`,
+    `undated`, `aged`, `no_id`. `clock` dates the relative text; a date that
+    lands after `now` is not believed and reads as undated."""
+    from services.workday_cxs_fetcher import _approx_iso_from_relative
     w = _worker()
-    provider = _provider()
-    endpoint = w._endpoint_from_member(member)
-    try:
-        detailed = provider.fetch_detail(
-            endpoint, job, _DetailContext({"jobPostingInfo": detail["jobPostingInfo"]}))
-    except Exception as exc:  # pragma: no cover - the provider is defensive
-        logger.debug("radar: detail mapping failed (%s)", type(exc).__name__)
-        return ""
-    if detailed is None:
-        return ""
-    w._adopt_detail_date(row, detailed)
-    if not any(row.get("locations") or []):
-        stated = w._provider_locations(detailed)
-        if stated:
-            row["locations"] = stated if isinstance(stated, list) else [stated]
-    return str(detailed.description or "")[:DETAIL_KEEP_CHARS]
+
+    title = str(posting.get("title") or "").strip()
+    if not title:
+        return None, "untitled"
+    posted_text = str(posting.get("postedOn") or "").strip()
+    posted_at = w._parse_iso(_approx_iso_from_relative(posted_text, now=clock))
+    if posted_at is None or posted_at > now:
+        # ADR-001, as in the crawl: an unknown date is never "today".
+        return None, "undated"
+    if posted_at < cutoff:
+        return None, "aged"
+    path = str(posting.get("externalPath") or "").lstrip("/")
+    req_id = (posting.get("bulletFields") or [None])[0] or path
+    if not req_id:
+        return None, "no_id"
+    base, site = _workday_apply_base(member)
+    return w._listing_row(
+        member, req_id,
+        title=title,
+        url=f"{base}/{site}/{path}" if path else base,
+        posted_at=posted_at,
+        location=str(posting.get("locationsText") or "").strip(),
+        employment_type=str(posting.get("timeType") or "").strip(),
+        posted_text=posted_text,
+        detail_ref=path,
+    ), ""
+
+
+def map_posting(member: Dict[str, Any], posting: Dict[str, Any], *,
+                cutoff: datetime, clock: Optional[datetime] = None,
+                now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
+    """`workday_row` without the reason (a listing row or None)."""
+    now = now or _utcnow()
+    return workday_row(member, posting, cutoff=cutoff, clock=clock or now, now=now)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -804,7 +876,8 @@ def _complete_leases(db, email: str, batch: Dict[str, Any],
                      now: datetime) -> None:
     """`radar-2`: tell the board ledger what this written batch read.
 
-    A known board read with no search term is a read of that board. A read
+    A known board read with no search term is a read of that board when the
+    uploading account holds its lease, and only then (`record_reads`). A read
     with a term is a search of it and moves nothing. `reads` names boards the
     browser could not read. The response gains a `reads` count only when the
     batch sent `reads`, so a `radar-1` answer is unchanged."""
@@ -888,13 +961,14 @@ def _process(db, email: str, batch: Dict[str, Any], *, mode: str,
     fresh_cutoff = now - timedelta(days=max(0, int(w.FRESHNESS_BOUNDARY_DAYS)))
     early_cutoff = min(fresh_cutoff,
                        now - timedelta(days=max(0, int(inv.EARLY_CAREER_MAX_AGE_DAYS))))
+    # "Posted 3 Days Ago" is counted back from when the browser READ the
+    # board, not from when the batch arrived: a parked batch can be a day late.
+    clock = batch_clock(batch.get("observed_at"), now)
 
     # Map every posting, deduped by its id across boards and search terms
     # (the same posting under two terms is one sighting; keep a detail if
-    # either carried one). The detail is applied only AFTER the age check,
-    # as in the crawl: a row is admitted on its listing date, and an exact
-    # `startDate` the detail states never ages an admitted row out.
-    rows: Dict[str, Tuple[Dict[str, Any], Dict[str, Any], Any, Optional[Dict[str, Any]]]] = {}
+    # either carried one).
+    rows: Dict[str, List[Any]] = {}
     order: List[str] = []
     for board in batch["boards"]:
         counts["postings"]["rejected"] += board["rejected"]
@@ -919,42 +993,77 @@ def _process(db, email: str, batch: Dict[str, Any], *, mode: str,
             pass
         details = {d["externalPath"].lstrip("/"): d for d in board["details"]}
         for posting in board["postings"]:
-            job = map_posting(member, posting)
-            if job is None:
-                counts["postings"]["rejected"] += 1
-                continue
-            row = w._raw_job_to_listing(member, job, cutoff=early_cutoff)
+            row, why = workday_row(member, posting, cutoff=early_cutoff,
+                                   clock=clock, now=now)
             if row is None:
-                counts["postings"]["aged_out"] += 1
+                # A row with no readable date is skipped, as the crawl skips
+                # it. It is counted with the rejected ones.
+                counts["postings"]["aged_out" if why == "aged" else "rejected"] += 1
                 continue
             detail = details.get(posting["externalPath"].lstrip("/"))
             sjid = row["source_job_id"]
             if sjid in rows:
-                if detail is not None and rows[sjid][3] is None:
-                    rows[sjid] = (rows[sjid][0], rows[sjid][1], rows[sjid][2], detail)
+                if detail is not None and rows[sjid][2] is None:
+                    rows[sjid][2] = detail
                 continue
-            rows[sjid] = (member, row, job, detail)
+            rows[sjid] = [member, row, detail]
             order.append(sjid)
 
-    if not order:
-        return {"batch_id": batch["batch_id"], "mode": mode, **counts}
+    entries: List[Dict[str, Any]] = []
+    for sjid in order:
+        member, row, detail = rows[sjid]
+        body = flatten_body(detail["jobPostingInfo"]["jobDescription"]) if detail else ""
+        entries.append({"member": member, "row": row, "body": body, "full": bool(body)})
+    if entries:
+        _write_rows(db, w.SOURCE_WORKDAY, entries, mode=mode, now=now, counts=counts,
+                    written=written, fresh_cutoff=fresh_cutoff)
+    return {"batch_id": batch["batch_id"], "mode": mode, **counts}
 
-    src = w.SOURCE_WORKDAY
+
+def _write_rows(db, src: str, entries: List[Dict[str, Any]], *, mode: str,
+                now: datetime, counts: Dict[str, Any],
+                written: List[Dict[str, str]], fresh_cutoff: datetime,
+                admit_age: bool = True) -> Dict[str, str]:
+    """The ONE guarded write for everything a browser reports.
+
+    A Radar batch and a single posting (`radar-3`) both end here, so both get
+    the same triage (`_decide`), the same guard on a held posting's title,
+    link and detail address, the same `origin` label, the same ledger and the
+    crawl's own way of reading requirements.
+
+    `entries`: `{member, row, body, full}`, one per posting of source `src`.
+    `row` is a listing row (`_listing_row`). `body` is the flattened text the
+    browser brought, and `full` says whether it is a whole description or
+    only a teaser.
+
+    Returns what was decided per `source_job_id`: `created`, `updated`,
+    `reopened`, `touched`, `held`, `aged_out` or `rejected`. In a dry run the
+    decision is returned and nothing is written."""
+    from services import job_inventory_service as inv
+    w = _worker()
+
+    decided: Dict[str, str] = {}
+    order = [e["row"]["source_job_id"] for e in entries]
+    by_id = {e["row"]["source_job_id"]: e for e in entries}
     existing_by_id = inv.get_postings_map(src, order)
-    pairs = [(rows[s][0], rows[s][1]) for s in order]
-    kept, aged = w._admit_by_age(pairs, existing_by_id, fresh_cutoff=fresh_cutoff)
-    counts["postings"]["aged_out"] += aged
-    kept_ids = {row["source_job_id"] for _m, row in kept}
+    if admit_age:
+        pairs = [(by_id[s]["member"], by_id[s]["row"]) for s in order]
+        kept, aged = w._admit_by_age(pairs, existing_by_id, fresh_cutoff=fresh_cutoff)
+        counts["postings"]["aged_out"] += aged
+        kept_ids = {row["source_job_id"] for _m, row in kept}
+    else:
+        kept_ids = set(order)
     guards = _guard_fields(db, src, [i for i in order if i in existing_by_id])
 
     touch_ids: List[str] = []
     reread: List[Tuple[Dict[str, Any], str]] = []
-    writes: List[Tuple[Dict[str, Any], Dict[str, Any], str, str]] = []
+    writes: List[Tuple[Dict[str, Any], str]] = []
     for sjid in order:
         if sjid not in kept_ids:
+            decided[sjid] = "aged_out"
             continue
-        member, row, job, detail = rows[sjid]
-        body = _apply_detail(member, row, job, detail) if detail is not None else ""
+        entry = by_id[sjid]
+        row = entry["row"]
         counts["postings"]["accepted"] += 1
         existing = existing_by_id.get(sjid)
         guard = guards.get(sjid) or {}
@@ -962,24 +1071,28 @@ def _process(db, email: str, batch: Dict[str, Any], *, mode: str,
             # What must be kept could not be read, so nothing is changed.
             decision = "held"
         else:
-            decision = _decide(existing, row, bool(body), guard)
+            decision = _decide(existing, row, bool(entry["body"] and entry["full"]), guard)
         if decision == "held":
             counts["postings"]["accepted"] -= 1
             counts["postings"]["held"] += 1
+            decided[sjid] = "held"
         elif decision in ("touched", "reread"):
             counts["would"]["touched"] += 1
             touch_ids.append(sjid)
+            decided[sjid] = "touched"
             if decision == "reread":
                 reread.append((existing, str(row.get("title") or "")))
         elif decision == "created":
             counts["would"]["created"] += 1
-            writes.append((member, row, body, decision))
+            writes.append((entry, decision))
+            decided[sjid] = "created"
         else:
             counts["would"]["updated"] += 1
-            writes.append((member, row, body, decision))
+            writes.append((entry, decision))
+            decided[sjid] = decision
 
     if mode != MODE_ON:
-        return {"batch_id": batch["batch_id"], "mode": mode, **counts}
+        return decided
 
     # --- on: the crawl's own writes, and nothing that closes ---------------
     for start in range(0, len(touch_ids), 500):
@@ -987,7 +1100,9 @@ def _process(db, email: str, batch: Dict[str, Any], *, mode: str,
     counts["postings"]["touched"] += len(touch_ids)
     written.extend({"id": i, "did": "touched"} for i in touch_ids)
 
-    for member, row, body, decision in writes:
+    for entry, decision in writes:
+        member, row, body = entry["member"], entry["row"], entry["body"]
+        full = bool(body and entry["full"])
         payload = dict(row)
         detail_ref = str(payload.pop("_detail_ref", None) or "")
         if detail_ref:
@@ -1004,19 +1119,20 @@ def _process(db, email: str, batch: Dict[str, Any], *, mode: str,
                     payload[field] = stored
         if body:
             payload["description"] = body
+        if full:
             payload["body_state"] = w.BODY_FULL
             payload["detail_revision"] = w._detail_revision(member)
         else:
             payload["body_state"] = w.BODY_TEASER
+        sjid = row["source_job_id"]
         try:
             outcome = inv.upsert_posting(payload, now=now)
         except ValueError as exc:
             counts["postings"]["rejected"] += 1
             counts["postings"]["accepted"] -= 1
-            logger.warning("radar: write refused for %s (%s)",
-                           str(row.get("source_job_id"))[:60], exc)
+            decided[sjid] = "rejected"
+            logger.warning("radar: write refused for %s (%s)", str(sjid)[:60], exc)
             continue
-        sjid = row["source_job_id"]
         if outcome.get("created"):
             counts["postings"]["created"] += 1
             did = "created"
@@ -1032,6 +1148,7 @@ def _process(db, email: str, batch: Dict[str, Any], *, mode: str,
         else:
             counts["postings"]["updated"] += 1
             did = "updated"
+        decided[sjid] = did
         written.append({"id": sjid, "did": did})
 
         if outcome.get("kept_stored_body"):
@@ -1051,7 +1168,7 @@ def _process(db, email: str, batch: Dict[str, Any], *, mode: str,
     if reread:
         w._reread_stored(src, reread, deadline=time.monotonic() + 15.0, stop=None,
                          counts=collections.Counter(), now=now)
-    return {"batch_id": batch["batch_id"], "mode": mode, **counts}
+    return decided
 
 
 # ---------------------------------------------------------------------------
@@ -1074,7 +1191,7 @@ def _upload_groups(db, match: Dict[str, Any], group_id: Any) -> List[Dict[str, A
         "unknown_boards": {"$sum": "$response.boards.unknown"},
         "last_at": {"$max": "$received_at"},
     }
-    for field in _SUM_FIELDS:
+    for field in _SUM_FIELDS + ("staged",):
         group[field] = {"$sum": {"$ifNull": [f"$response.postings.{field}", 0]}}
     return list(db[BATCHES].aggregate([{"$match": match}, {"$group": group}],
                                       maxTimeMS=15000))
@@ -1087,13 +1204,17 @@ def _upload_row(doc: Dict[str, Any]) -> Dict[str, Any]:
            "last_at": _iso(doc.get("last_at"))}
     for field in _SUM_FIELDS:
         row[field] = int(doc.get(field) or 0)
+    # `radar-3`: single postings the registry could not place. Staged, so
+    # not part of `recorded`.
+    row["staged"] = int(doc.get("staged") or 0)
     # What reached the shared list: written new, given a body, or kept alive.
     row["recorded"] = row["created"] + row["updated"] + row["touched"] + row["reopened"]
     return row
 
 
 def uploads_today(email: str, *, now: Optional[datetime] = None) -> Dict[str, Any]:
-    """This account's own received batches for the current UTC day.
+    """This account's own received batches for the current UTC day. A single
+    posting (`radar-3`) is one batch row of its own, so it is counted here.
 
     `available: false` means the count could not be read, which is not zero."""
     now = now or _utcnow()
@@ -1126,6 +1247,9 @@ def uploads_summary(days: int = 7, *, now: Optional[datetime] = None) -> Dict[st
     from services import browser_radar_fleet as fleet
     out["coverage"] = fleet.coverage_block(now=now)
     out["fleet"] = fleet.fleet_block(now=now)
+    # `radar-3`: how much is staged, by host. Counts only: no reporter.
+    from services import browser_radar_posting as posting
+    out.update(posting.staged_counts())
     try:
         db = _db()
         docs = _upload_groups(

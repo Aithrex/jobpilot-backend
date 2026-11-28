@@ -77,7 +77,7 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 from services.ats_providers.base import (DATE_EXACT, DATE_UNKNOWN, AtsProvider,
                                          ChallengeError, CrawlPolicy, Endpoint,
-                                         FetchContext, RawJob, fp)
+                                         FetchContext, RawJob, fp, url_parts)
 from services.ats_providers.registry import register
 from services.ats_providers.util import (html_to_text, looks_remote, slugify,
                                          to_iso)
@@ -450,6 +450,21 @@ class SuccessFactorsProvider(AtsProvider):
         return super().board_url(endpoint)
 
     # -- listing -------------------------------------------------------------
+
+    # -- one posting, from its own page URL (`radar-3`) ------------------------
+
+    def posting_id_from_url(self, endpoint: Endpoint, url: str) -> str:
+        """`<host>/job/<City-Title-Slug>/<id>[...]`: the number every listing
+        surface here reads with `_JOB_ID_RE`. The portal form
+        (`?career_job_req_id=`) is not read: its page URL cannot be kept
+        without its query."""
+        host, segments, _query = url_parts(url)
+        if not host or host != self._host_of(endpoint):
+            return ""
+        if len(segments) != 3 or segments[0].lower() != "job":
+            return ""
+        match = re.match(r"^(\d{3,20})(?:-[A-Za-z_]{2,10})?$", segments[2])
+        return match.group(1) if match else ""
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:

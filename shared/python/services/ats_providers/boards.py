@@ -49,7 +49,7 @@ from urllib.parse import urljoin
 
 from services.ats_providers.base import (DATE_EXACT, DATE_UNKNOWN, AtsProvider,
                                          ChallengeError, CrawlPolicy, Endpoint,
-                                         FetchContext, RawJob, fp)
+                                         FetchContext, RawJob, fp, url_parts)
 from services.ats_providers.registry import register
 from services.ats_providers.util import (from_epoch, html_to_text, looks_remote,
                                          to_iso)
@@ -100,6 +100,11 @@ def _pay_of(job: Dict[str, Any]) -> Any:
 
 def _join(*parts: Any, sep: str = ", ") -> str:
     return sep.join(str(p).strip() for p in parts if p and str(p).strip())
+
+
+#: A posting id as Lever and Ashby print it in a posting's own URL.
+_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                      r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
 class _BoardProvider(AtsProvider):
@@ -388,6 +393,31 @@ class GreenhouseProvider(_BoardProvider):
             return None
         return str(payload.get("name") or "").strip() or None
 
+    # -- one posting, from its own page URL (`radar-3`) ------------------------
+
+    def posting_id_from_url(self, endpoint: Endpoint, url: str) -> str:
+        """`(job-)boards(.eu).greenhouse.io/<board>/jobs/<id>`: the numeric id
+        is the `id` the boards API lists. A company's own page that carries
+        `?gh_jid=` names no board in its URL and is not read here."""
+        host, segments, _query = url_parts(url)
+        if host not in self.portal_hosts or len(segments) != 3:
+            return ""
+        if segments[0].lower() != str(endpoint.tenant or "").lower() \
+                or segments[1].lower() != "jobs":
+            return ""
+        return segments[2] if re.fullmatch(r"\d{3,20}", segments[2]) else ""
+
+    def posting_links(self, endpoint: Endpoint, raw_id: str,
+                      url: str) -> Tuple[str, str]:
+        region = self.region_of(endpoint)
+        if region is None or not raw_id or not endpoint.tenant:
+            return "", ""
+        page = f"https://{self.REGION_BOARD_HOSTS[region]}/{endpoint.tenant}/jobs/{raw_id}"
+        if region == "eu":
+            return page, page
+        return page, (f"https://boards-api.greenhouse.io/v1/boards/"
+                      f"{endpoint.tenant}/jobs/{raw_id}")
+
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
         region = self.region_of(endpoint)
@@ -636,6 +666,24 @@ class LeverProvider(_BoardProvider):
         _api, portal = self._hosts(endpoint)
         return f"https://{portal}/{endpoint.tenant}"
 
+    # -- one posting, from its own page URL (`radar-3`) ------------------------
+
+    def posting_id_from_url(self, endpoint: Endpoint, url: str) -> str:
+        """`jobs(.eu).lever.co/<company>/<uuid>`: the uuid is the posting
+        `id`. `/<uuid>/apply` is the form, not the posting."""
+        host, segments, _query = url_parts(url)
+        if host != self._hosts(endpoint)[1] or len(segments) != 2:
+            return ""
+        if segments[0].lower() != str(endpoint.tenant or "").lower():
+            return ""
+        return segments[1].lower() if _UUID_RE.fullmatch(segments[1]) else ""
+
+    def posting_links(self, endpoint: Endpoint, raw_id: str,
+                      url: str) -> Tuple[str, str]:
+        if not raw_id or not endpoint.tenant:
+            return "", ""
+        return f"https://{self._hosts(endpoint)[1]}/{endpoint.tenant}/{raw_id}", ""
+
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
         api, _portal = self._hosts(endpoint)
@@ -754,6 +802,24 @@ class AshbyProvider(_BoardProvider):
         return self._owner_from_portal_title(
             f"https://jobs.ashbyhq.com/{endpoint.tenant}", ctx)
 
+    # -- one posting, from its own page URL (`radar-3`) ------------------------
+
+    def posting_id_from_url(self, endpoint: Endpoint, url: str) -> str:
+        """`jobs.ashbyhq.com/<org>/<uuid>`: the uuid is the job `id`.
+        `/<uuid>/application` is the form."""
+        host, segments, _query = url_parts(url)
+        if host not in self.portal_hosts or len(segments) != 2:
+            return ""
+        if segments[0].lower() != str(endpoint.tenant or "").lower():
+            return ""
+        return segments[1].lower() if _UUID_RE.fullmatch(segments[1]) else ""
+
+    def posting_links(self, endpoint: Endpoint, raw_id: str,
+                      url: str) -> Tuple[str, str]:
+        if not raw_id or not endpoint.tenant:
+            return "", ""
+        return f"https://jobs.ashbyhq.com/{endpoint.tenant}/{raw_id}", ""
+
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
         # GET only. POST to this path returns 401, which reads as "credentials
@@ -871,6 +937,28 @@ class SmartRecruitersProvider(_BoardProvider):
         if not rows or not isinstance(rows[0], dict):
             return None
         return str((rows[0].get("company") or {}).get("name") or "").strip() or None
+
+    # -- one posting, from its own page URL (`radar-3`) ------------------------
+
+    def posting_id_from_url(self, endpoint: Endpoint, url: str) -> str:
+        """`jobs.smartrecruiters.com/<Company>/<id>[-slug]`: the leading
+        number is the posting `id`. `careers.smartrecruiters.com/<Company>`
+        is the listing."""
+        host, segments, _query = url_parts(url)
+        if host != "jobs.smartrecruiters.com" or len(segments) != 2:
+            return ""
+        if segments[0].lower() != str(endpoint.tenant or "").lower():
+            return ""
+        match = re.match(r"^(\d{6,24})(?:-|$)", segments[1])
+        return match.group(1) if match else ""
+
+    def posting_links(self, endpoint: Endpoint, raw_id: str,
+                      url: str) -> Tuple[str, str]:
+        if not raw_id or not endpoint.tenant:
+            return "", ""
+        return (f"https://jobs.smartrecruiters.com/{endpoint.tenant}/{raw_id}",
+                f"https://api.smartrecruiters.com/v1/companies/"
+                f"{endpoint.tenant}/postings/{raw_id}")
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
@@ -1054,6 +1142,29 @@ class WorkableProvider(_BoardProvider):
         if not tenant or tenant.lower() in self._RESERVED:
             return None
         return Endpoint(vendor=self.vendor, tenant=tenant)
+
+    # -- one posting, from its own page URL (`radar-3`) ------------------------
+
+    def posting_id_from_url(self, endpoint: Endpoint, url: str) -> str:
+        """`apply.workable.com/<account>/j/<shortcode>`: the shortcode is the
+        id the widget lists. `/j/<shortcode>/apply` is the form, and the short
+        link `apply.workable.com/j/<shortcode>` names no account."""
+        host, segments, _query = url_parts(url)
+        if host != "apply.workable.com" or len(segments) != 3:
+            return ""
+        if segments[0].lower() != str(endpoint.tenant or "").lower() \
+                or segments[1].lower() != "j":
+            return ""
+        return segments[2] if re.fullmatch(r"[A-Za-z0-9]{6,24}", segments[2]) else ""
+
+    def posting_links(self, endpoint: Endpoint, raw_id: str,
+                      url: str) -> Tuple[str, str]:
+        if not raw_id or not endpoint.tenant:
+            return "", ""
+        # The widget's own `url` for a job is the short link.
+        return (f"https://apply.workable.com/j/{raw_id}",
+                f"https://apply.workable.com/api/v2/accounts/"
+                f"{endpoint.tenant}/jobs/{raw_id}")
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
@@ -1270,6 +1381,30 @@ class NeoGovProvider(_BoardProvider):
            confidence=85),
     )
 
+    # -- one posting, from its own page URL (`radar-3`) ------------------------
+
+    def posting_id_from_url(self, endpoint: Endpoint, url: str) -> str:
+        """`www.governmentjobs.com/careers/<agency>/jobs/<id>[/<slug>]`: the
+        number is the listing's `ID`."""
+        host, segments, _query = url_parts(url)
+        if host not in ("www.governmentjobs.com", "governmentjobs.com"):
+            return ""
+        if len(segments) not in (4, 5) or segments[0].lower() != "careers" \
+                or segments[2].lower() != "jobs":
+            return ""
+        if len(segments) == 5 and segments[4].lower() in ("apply", "login"):
+            return ""
+        if segments[1].lower() != str(endpoint.tenant or "").lower():
+            return ""
+        return segments[3] if re.fullmatch(r"\d{3,20}", segments[3]) else ""
+
+    def posting_links(self, endpoint: Endpoint, raw_id: str,
+                      url: str) -> Tuple[str, str]:
+        if not raw_id or not endpoint.tenant:
+            return "", ""
+        return (f"https://www.governmentjobs.com/careers/"
+                f"{endpoint.tenant}/jobs/{raw_id}", "")
+
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
         if ctx.post_json is None:
@@ -1433,6 +1568,26 @@ class JobviteProvider(_BoardProvider):
         return Endpoint(vendor=self.vendor, tenant=tenant)
 
     # -- listing -------------------------------------------------------------
+
+    # -- one posting, from its own page URL (`radar-3`) ------------------------
+
+    def posting_id_from_url(self, endpoint: Endpoint, url: str) -> str:
+        """`jobs.jobvite.com/<company>/job/<id>`: the id is the one in the
+        listing's own job link (`_HREF_RE`). `/job/<id>/apply` is the form."""
+        host, segments, _query = url_parts(url)
+        if host != "jobs.jobvite.com" or len(segments) != 3:
+            return ""
+        if segments[0].lower() != str(endpoint.tenant or "").lower() \
+                or segments[1].lower() != "job":
+            return ""
+        return segments[2] if re.fullmatch(r"[A-Za-z0-9_\-]{4,40}", segments[2]) else ""
+
+    def posting_links(self, endpoint: Endpoint, raw_id: str,
+                      url: str) -> Tuple[str, str]:
+        if not raw_id or not endpoint.tenant:
+            return "", ""
+        page = f"https://jobs.jobvite.com/{endpoint.tenant}/job/{raw_id}"
+        return page, page
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
@@ -1619,6 +1774,25 @@ class BambooHrProvider(_BoardProvider):
             if joined:
                 return joined[:160]
         return ""
+
+    # -- one posting, from its own page URL (`radar-3`) ------------------------
+
+    def posting_id_from_url(self, endpoint: Endpoint, url: str) -> str:
+        """`<company>.bamboohr.com/careers/<id>`: the number is the opening's
+        `id` in `/careers/list`."""
+        host, segments, _query = url_parts(url)
+        own = (endpoint.host or f"{endpoint.tenant}.bamboohr.com").strip().lower()
+        if host != own or len(segments) != 2 or segments[0].lower() != "careers":
+            return ""
+        return segments[1] if re.fullmatch(r"\d{1,12}", segments[1]) else ""
+
+    def posting_links(self, endpoint: Endpoint, raw_id: str,
+                      url: str) -> Tuple[str, str]:
+        host = (endpoint.host or f"{endpoint.tenant}.bamboohr.com").strip().lower()
+        if not raw_id or not endpoint.tenant:
+            return "", ""
+        return (f"https://{host}/careers/{raw_id}",
+                f"https://{host}/careers/{raw_id}/detail")
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
