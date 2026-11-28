@@ -37,7 +37,8 @@ order and the 30-day answer cache.
 [Browser Radar](specs/browser-radar.md) is the `radar-1` contract: Workday
 listings the owner's own browser reads while the crawler's box is behind
 Workday's bot wall, written through the crawler's own path, on by default for
-contributor accounts.
+contributor accounts. Its `radar-2` section is the fleet half: one row per
+board, leases, the brake and the stored coverage number.
 
 ## decisions/ — the ADRs
 

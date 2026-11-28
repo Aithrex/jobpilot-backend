@@ -834,7 +834,9 @@ def workday_search():
 # listings endpoint writes through the crawler's own path, on by default
 # for contributors (`BROWSER_RADAR_INGEST` = on | dry_run | off). Business
 # refusals are 403/409/429/400 — never 401, which the frontend treats as a
-# dead session.
+# dead session. `radar-2` adds the fleet routes below (`/claims`,
+# `/claims/release`): due boards are leased to one browser at a time
+# (services/browser_radar_fleet.py).
 # ------------------------------------------------------------------
 
 @jobs_bp.route("/browser-radar/plan", methods=["GET"])
@@ -889,6 +891,82 @@ def browser_radar_uploads_today():
     """What the server received from this account today (UTC). Read-only."""
     from services import browser_radar_service as radar
     return jsonify(radar.uploads_today(get_jwt_identity())), 200
+
+
+def _radar_refusal(e):
+    """A Radar refusal as JSON. 400/403/409/429, never 401."""
+    body = {"error": e.code, "message": e.message}
+    if e.retry_after is not None:
+        body["retry_after_seconds"] = int(e.retry_after)
+    resp = jsonify(body)
+    if e.retry_after is not None:
+        resp.headers["Retry-After"] = str(int(e.retry_after))
+    return resp, e.status
+
+
+def _radar_json_body():
+    """The request's JSON, or None for an empty body. A body that is not
+    JSON is refused by the validators, which get a non-dict marker."""
+    raw = request.get_data(cache=True) or b""
+    if not raw.strip():
+        return None
+    data = request.get_json(silent=True)
+    return data if data is not None else []
+
+
+@jobs_bp.route("/browser-radar/claims", methods=["POST"])
+@jwt_required()
+def browser_radar_claims():
+    """Lease a few due Workday boards to this account's browser (`radar-2`).
+
+    No tasks is a 200 with a `reason` (not a contributor, ingest off, fleet
+    paused, daily limit, nothing due): the extension reads it and moves on."""
+    from services import browser_radar_fleet as fleet
+    from services import browser_radar_service as radar
+
+    user_email = get_jwt_identity()
+    if len(request.get_data(cache=True) or b"") > 2048:
+        return jsonify({"error": "invalid_request", "message": "The body is too large."}), 400
+    if check_rate_limit(f"radar:claims:{user_email}", max_requests=30,
+                        window_seconds=3600, fail_open=True):
+        resp = jsonify({"error": "rate_limited", "message": "Too many claim requests.",
+                        "retry_after_seconds": 3600})
+        resp.headers["Retry-After"] = "3600"
+        return resp, 429
+    try:
+        limit = fleet.validate_claim_request(_radar_json_body())
+        return jsonify(fleet.claim_boards(user_email, limit)), 200
+    except radar.RadarError as e:
+        return _radar_refusal(e)
+    except Exception as e:
+        logger.error(f"Browser radar claim error: {type(e).__name__}: {e}")
+        return jsonify({"error": "Failed to claim boards"}), 500
+
+
+@jobs_bp.route("/browser-radar/claims/release", methods=["POST"])
+@jwt_required()
+def browser_radar_claims_release():
+    """Hand back leases this account holds, and say why (`radar-2`)."""
+    from services import browser_radar_fleet as fleet
+    from services import browser_radar_service as radar
+
+    user_email = get_jwt_identity()
+    if len(request.get_data(cache=True) or b"") > 4096:
+        return jsonify({"error": "invalid_request", "message": "The body is too large."}), 400
+    if check_rate_limit(f"radar:release:{user_email}", max_requests=60,
+                        window_seconds=3600, fail_open=True):
+        resp = jsonify({"error": "rate_limited", "message": "Too many release requests.",
+                        "retry_after_seconds": 3600})
+        resp.headers["Retry-After"] = "3600"
+        return resp, 429
+    try:
+        lease_ids, reason = fleet.validate_release(_radar_json_body())
+        return jsonify(fleet.release_leases(user_email, lease_ids, reason)), 200
+    except radar.RadarError as e:
+        return _radar_refusal(e)
+    except Exception as e:
+        logger.error(f"Browser radar release error: {type(e).__name__}: {e}")
+        return jsonify({"error": "Failed to release the leases"}), 500
 
 
 # ------------------------------------------------------------------

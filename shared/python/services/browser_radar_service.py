@@ -39,9 +39,20 @@ Rules this module keeps (the contract is `radar-1`, written down in
   the batch row (`written`), and a posting first written by a browser carries
   `origin: "browser"`, so one account's rows can be found and removed.
 
-The crawler does not depend on any of this. Dropping the three collections
-here (`browser_radar_batches`, `browser_radar_usage`,
-`browser_radar_unknown_boards`) removes the feature's state and nothing else.
+`radar-2` adds the fleet half, in `browser_radar_fleet.py`. `radar-1` gives
+every contributor the same stale boards. `radar-2` keeps one row per registry
+board (`browser_radar_board_leases`), leases due boards to one browser at a
+time (`POST .../claims`), and counts a termless read of a known board as a
+read of that board. This module calls it in three places: the plan says
+`claims: true` when the account can claim, a written batch completes leases
+(`ingest_batch`), and the admin payload carries `coverage` and `fleet`.
+`radar-1` clients are unchanged.
+
+The crawler does not depend on any of this. Dropping the six collections
+(`browser_radar_batches`, `browser_radar_usage`,
+`browser_radar_unknown_boards`, `browser_radar_board_leases`,
+`browser_radar_coverage_snapshots`, `browser_radar_fleet`) removes the
+feature's state and nothing else.
 """
 from __future__ import annotations
 
@@ -66,6 +77,10 @@ MODES = (MODE_OFF, MODE_DRY_RUN, MODE_ON)
 BATCHES = "browser_radar_batches"
 USAGE = "browser_radar_usage"
 UNKNOWN_BOARDS = "browser_radar_unknown_boards"
+# `radar-2` (browser_radar_fleet.py). Named here so the index list is whole.
+LEASES = "browser_radar_board_leases"
+COVERAGE = "browser_radar_coverage_snapshots"
+FLEET = "browser_radar_fleet"
 
 #: What the plan suggests. The extension clamps these to its own hard caps,
 #: so the server can only ever LOWER what a browser does.
@@ -207,19 +222,36 @@ _INDEXED = False
 _INDEX_LOCK = threading.Lock()
 
 
+_TTL = {"expireAfterSeconds": 0, "name": "ttl_expire_at"}
+
+#: Every Radar index. `scripts/migrate_indexes.py` mirrors this list.
+INDEX_SPECS = (
+    (BATCHES, [("expire_at", 1)], _TTL),
+    (USAGE, [("expire_at", 1)], _TTL),
+    # The claim: `in_registry` equal, `due_at` a range and the sort, `rank`
+    # the tie-break, `parked_until` checked from the key.
+    (LEASES, [("in_registry", 1), ("due_at", 1), ("rank", 1), ("parked_until", 1)],
+     {"name": "radar_board_due"}),
+    # A release finds its board by the lease id. Sparse: a free board has none.
+    (LEASES, [("lease.id", 1)], {"name": "radar_board_lease_id", "sparse": True}),
+    (COVERAGE, [("measured_at", -1)], {"name": "radar_coverage_recent"}),
+    (COVERAGE, [("expire_at", 1)], _TTL),
+    (FLEET, [("expire_at", 1)], _TTL),
+)
+
+
 def _ensure_indexes(db) -> None:
-    """TTL on the two state collections. Best effort: a failure costs only
-    retention, never a request."""
+    """The Radar indexes, once per process. Best effort: a failure costs
+    retention or speed, never a request."""
     global _INDEXED
     if _INDEXED:
         return
     with _INDEX_LOCK:
         if _INDEXED:
             return
-        for name in (BATCHES, USAGE):
+        for name, keys, options in INDEX_SPECS:
             try:
-                db[name].create_index("expire_at", expireAfterSeconds=0,
-                                      name="ttl_expire_at")
+                db[name].create_index(keys, **options)
             except Exception as exc:  # pragma: no cover
                 logger.warning("radar: index on %s failed (%s)", name, type(exc).__name__)
         _INDEXED = True
@@ -359,6 +391,18 @@ def _tenant_stats() -> List[Tuple[str, int, Optional[datetime]]]:
     with _STATS_LOCK:
         if _STATS["rows"] is not None and now - _STATS["at"] < STATS_TTL_SECONDS:
             return _STATS["rows"]
+    rows = _read_tenant_stats()
+    if rows is None:
+        return []
+    with _STATS_LOCK:
+        _STATS["rows"] = rows
+        _STATS["at"] = now
+    return rows
+
+
+def _read_tenant_stats() -> Optional[List[Tuple[str, int, Optional[datetime]]]]:
+    """The grouped read itself, uncached. None when it failed, so a caller
+    that must tell "no postings" from "could not read" can."""
     w = _worker()
     rows: List[Tuple[str, int, Optional[datetime]]] = []
     try:
@@ -373,10 +417,7 @@ def _tenant_stats() -> List[Tuple[str, int, Optional[datetime]]]:
                 rows.append((tenant, int(doc.get("n") or 0), _aware(doc.get("seen"))))
     except Exception as exc:
         logger.warning("radar: tenant stats unavailable (%s)", type(exc).__name__)
-        return []
-    with _STATS_LOCK:
-        _STATS["rows"] = rows
-        _STATS["at"] = now
+        return None
     return rows
 
 
@@ -429,6 +470,9 @@ def build_plan(email: str, limit: int = PLAN_DEFAULT_BOARDS, *,
         "enabled": on,
         "ingest_mode": ingest_mode(),
         "contributor": contributor,
+        # `radar-2`: ask `POST .../claims` for shared boards instead of
+        # reading the `stale` tasks below (kept for `radar-1` clients).
+        "claims": bool(on and contributor and ingest_mode() == MODE_ON),
         "generated_at": now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         "search_terms": terms,
         "limits": dict(PLAN_LIMITS),
@@ -510,8 +554,13 @@ def validate_batch(body: Any) -> Dict[str, Any]:
     batch_id = body.get("batch_id")
     if not isinstance(batch_id, str) or not _BATCH_ID_RE.match(batch_id):
         raise _invalid("batch_id must be 8-80 letters, digits, '-' or '_'")
+    # `radar-2`: boards that could not be read. A batch may carry only these.
+    from services import browser_radar_fleet as fleet
+    reads = fleet.validate_reads(body.get("reads"))
     boards = body.get("boards")
-    if not isinstance(boards, list) or not boards:
+    if boards is None and reads:
+        boards = []
+    if not isinstance(boards, list) or not (boards or reads):
         raise _invalid("boards must be a non-empty list")
     if len(boards) > MAX_BOARDS:
         raise _invalid(f"at most {MAX_BOARDS} boards per batch")
@@ -562,6 +611,7 @@ def validate_batch(body: Any) -> Dict[str, Any]:
                    "version": _text(client.get("version"), 40)},
         "observed_at": _text(body.get("observed_at"), 40),
         "boards": out_boards,
+        "reads": reads,
         "postings_submitted": total_postings,
     }
 
@@ -712,7 +762,11 @@ def ingest_batch(email: str, body: Any, *, now: Optional[datetime] = None) -> Di
     _rate_limit(db, email, batch["postings_submitted"], now)
 
     written: List[Dict[str, str]] = []
-    response = _process(db, email, batch, mode=mode, now=now, written=written)
+    boards_read: List[Dict[str, Any]] = []
+    response = _process(db, email, batch, mode=mode, now=now, written=written,
+                        boards_read=boards_read)
+    if mode == MODE_ON:
+        _complete_leases(db, email, batch, boards_read, response, now)
     posted = response["postings"]
     logger.info(
         "radar: batch accepted mode=%s boards=%d unknown=%d sent=%d created=%d "
@@ -743,6 +797,35 @@ def ingest_batch(email: str, body: Any, *, now: Optional[datetime] = None) -> Di
     except Exception as exc:  # pragma: no cover - the audit must not fail a write
         logger.warning("radar: batch record failed (%s)", type(exc).__name__)
     return response
+
+
+def _complete_leases(db, email: str, batch: Dict[str, Any],
+                     boards_read: List[Dict[str, Any]], response: Dict[str, Any],
+                     now: datetime) -> None:
+    """`radar-2`: tell the board ledger what this written batch read.
+
+    A known board read with no search term is a read of that board. A read
+    with a term is a search of it and moves nothing. `reads` names boards the
+    browser could not read. The response gains a `reads` count only when the
+    batch sent `reads`, so a `radar-1` answer is unchanged."""
+    reads = batch.get("reads") or []
+    termless = [b for b in boards_read if not b["search_text"]]
+    if not termless and not reads:
+        return
+    try:
+        from services import browser_radar_fleet as fleet
+        if reads:
+            _, by_address = _index_members()
+            for read in reads:
+                address = (read["domain"], read["wd_host"], read["tenant"].lower(),
+                           read["site"].lower())
+                read["key"] = "|".join(address) if address in by_address else None
+        counts = fleet.record_reads(db, email, termless, reads, now=now)
+        if reads:
+            response["reads"] = {"recorded": counts["recorded"],
+                                 "ignored": counts["ignored"]}
+    except Exception as exc:  # pragma: no cover - the ledger must not fail a write
+        logger.warning("radar: lease completion failed (%s)", type(exc).__name__)
 
 
 def _decide(existing: Optional[Dict[str, Any]], row: Dict[str, Any],
@@ -793,11 +876,13 @@ def _guard_fields(db, source: str, ids: List[str]) -> Dict[str, Dict[str, Any]]:
 
 def _process(db, email: str, batch: Dict[str, Any], *, mode: str,
              now: datetime,
-             written: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+             written: Optional[List[Dict[str, str]]] = None,
+             boards_read: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     from services import job_inventory_service as inv
     w = _worker()
 
     written = written if written is not None else []
+    boards_read = boards_read if boards_read is not None else []
     counts = _empty_counts()
     _, by_address = _index_members()
     fresh_cutoff = now - timedelta(days=max(0, int(w.FRESHNESS_BOUNDARY_DAYS)))
@@ -823,6 +908,15 @@ def _process(db, email: str, batch: Dict[str, Any], *, mode: str,
             _record_unknown(db, board, email, now)
             continue
         counts["boards"]["accepted"] += 1
+        # For the board ledger (`radar-2`): which known boards this batch read.
+        try:
+            known = _board_of(member)
+            boards_read.append({
+                "key": "|".join(address), "search_text": board["search_text"],
+                "postings": board["submitted"],
+                "board": dict(known, stats_tenant=w._member_tenant(member).lower())})
+        except Exception:  # pragma: no cover - a malformed catalog row
+            pass
         details = {d["externalPath"].lstrip("/"): d for d in board["details"]}
         for posting in board["postings"]:
             job = map_posting(member, posting)
@@ -1027,6 +1121,11 @@ def uploads_summary(days: int = 7, *, now: Optional[datetime] = None) -> Dict[st
     out: Dict[str, Any] = {"generated_at": _iso(now), "days": days,
                            "contributor_scope": contributor_scope(),
                            "ingest_mode": ingest_mode(), "enabled": enabled()}
+    # `radar-2`: the stored coverage measurement (with its age) and the fleet
+    # as it is now. Each reads on its own and says so when it cannot.
+    from services import browser_radar_fleet as fleet
+    out["coverage"] = fleet.coverage_block(now=now)
+    out["fleet"] = fleet.fleet_block(now=now)
     try:
         db = _db()
         docs = _upload_groups(
