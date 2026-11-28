@@ -81,6 +81,14 @@ def ops_tech_feed():
     return jsonify(ops.tech_feed_ops()), 200
 
 
+@admin_bp.route("/ops/browser-radar", methods=["GET"])
+@admin_required
+def ops_browser_radar():
+    """Listings received from browsers, per account and day. `?days=` 1 to 30."""
+    from services import browser_radar_service as radar
+    return jsonify(radar.uploads_summary(request.args.get("days", 7))), 200
+
+
 @admin_bp.route("/ops/user-search", methods=["GET"])
 @admin_required
 def ops_user_search():

@@ -869,6 +869,8 @@ def browser_radar_listings():
     try:
         return jsonify(radar.ingest_batch(user_email, data)), 200
     except radar.RadarError as e:
+        # A refusal leaves no batch row, so this line is its only trace.
+        logger.info("radar: batch refused code=%s status=%s", e.code, e.status)
         body = {"error": e.code, "message": e.message}
         if e.retry_after is not None:
             body["retry_after_seconds"] = int(e.retry_after)
@@ -879,6 +881,14 @@ def browser_radar_listings():
     except Exception as e:
         logger.error(f"Browser radar ingest error: {type(e).__name__}: {e}")
         return jsonify({"error": "Failed to record the listings"}), 500
+
+
+@jobs_bp.route("/browser-radar/uploads/today", methods=["GET"])
+@jwt_required()
+def browser_radar_uploads_today():
+    """What the server received from this account today (UTC). Read-only."""
+    from services import browser_radar_service as radar
+    return jsonify(radar.uploads_today(get_jwt_identity())), 200
 
 
 # ------------------------------------------------------------------

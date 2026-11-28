@@ -30,9 +30,14 @@ Rules this module keeps (the contract is `radar-1`, written down in
 * **Nothing is ever closed.** A browser batch is a search, not a census.
 * **On by default (owner's call, 2026-11-19).** `BROWSER_RADAR_INGEST`
   unset means `on`; `dry_run` records the batch and reports what it would
-  write without writing, and `off` refuses batches. Contributor gating
-  (admins + `BROWSER_RADAR_CONTRIBUTORS`) is what keeps writes to trusted
-  accounts.
+  write without writing, and `off` refuses batches.
+* **Every signed-in account may send (2026-11-26), so a batch is untrusted
+  input.** What keeps it honest is in `_decide` and `_process`, not in who
+  sent it: a browser sighting never replaces a body we already fetched, never
+  changes a stored posting's title, link or detail address, and never reopens
+  a posting whose own page said it was gone. Every row it writes is listed on
+  the batch row (`written`), and a posting first written by a browser carries
+  `origin: "browser"`, so one account's rows can be found and removed.
 
 The crawler does not depend on any of this. Dropping the three collections
 here (`browser_radar_batches`, `browser_radar_usage`,
@@ -95,6 +100,14 @@ BATCHES_PER_HOUR = 30
 POSTINGS_PER_DAY = 5000
 
 BATCH_KEEP_DAYS = 30
+#: How many posting ids one batch row lists (a batch holds at most 1,000).
+LEDGER_MAX_IDS = 1000
+#: A posting first written by a browser.
+ORIGIN_BROWSER = "browser"
+#: Closures the posting's OWN page reported. A listing that still shows the
+#: requisition is not proof against them (boards keep dead rows listed), and
+#: the body a browser sends is the sender's word, so neither reopens one.
+NO_REOPEN_REASONS = frozenset({"detail-gone", "link-dead"})
 #: `_detail_via_provider` keeps this much of a fetched body; the browser path
 #: keeps exactly as much.
 DETAIL_KEEP_CHARS = 15000
@@ -558,36 +571,37 @@ def validate_batch(body: Any) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _rate_limit(db, email: str, postings: int, now: datetime) -> None:
-    """30 batches an hour and 5,000 postings a UTC day, per account."""
+    """30 batches an hour and 5,000 postings a UTC day, per account.
+
+    Each counter is claimed with one atomic `$inc` and handed back when the
+    claim goes over, so concurrent batches cannot each read "under the limit"
+    and all pass."""
     from pymongo import ReturnDocument
 
     hour = now.strftime("%Y%m%d%H")
     day = now.strftime("%Y%m%d")
     hour_end = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
     day_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    daily = db[USAGE].find_one({"_id": f"{email}|d|{day}"}, {"postings": 1}) or {}
-    if int(daily.get("postings") or 0) + postings > POSTINGS_PER_DAY:
-        raise RadarError(429, "rate_limited", "Daily posting limit reached.",
-                         retry_after=max(1, int((day_end - now).total_seconds())))
+    day_key = {"_id": f"{email}|d|{day}"}
+    if postings > 0:
+        daily = db[USAGE].find_one_and_update(
+            day_key,
+            {"$inc": {"postings": int(postings)},
+             "$setOnInsert": {"expire_at": day_end + timedelta(days=2)}},
+            upsert=True, return_document=ReturnDocument.AFTER)
+        if int((daily or {}).get("postings") or 0) > POSTINGS_PER_DAY:
+            db[USAGE].update_one(day_key, {"$inc": {"postings": -int(postings)}})
+            raise RadarError(429, "rate_limited", "Daily posting limit reached.",
+                             retry_after=max(1, int((day_end - now).total_seconds())))
     doc = db[USAGE].find_one_and_update(
         {"_id": f"{email}|h|{hour}"},
         {"$inc": {"batches": 1}, "$setOnInsert": {"expire_at": hour_end + timedelta(days=1)}},
         upsert=True, return_document=ReturnDocument.AFTER)
     if int((doc or {}).get("batches") or 0) > BATCHES_PER_HOUR:
+        if postings > 0:
+            db[USAGE].update_one(day_key, {"$inc": {"postings": -int(postings)}})
         raise RadarError(429, "rate_limited", "Too many batches this hour.",
                          retry_after=max(1, int((hour_end - now).total_seconds())))
-
-
-def _count_postings(db, email: str, postings: int, now: datetime) -> None:
-    if postings <= 0:
-        return
-    day = now.strftime("%Y%m%d")
-    day_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    db[USAGE].update_one(
-        {"_id": f"{email}|d|{day}"},
-        {"$inc": {"postings": int(postings)},
-         "$setOnInsert": {"expire_at": day_end + timedelta(days=2)}},
-        upsert=True)
 
 
 # ---------------------------------------------------------------------------
@@ -670,7 +684,7 @@ def _empty_counts() -> Dict[str, Any]:
     return {
         "boards": {"accepted": 0, "unknown": 0},
         "postings": {"accepted": 0, "rejected": 0, "created": 0, "updated": 0,
-                     "touched": 0, "reopened": 0, "aged_out": 0},
+                     "touched": 0, "reopened": 0, "aged_out": 0, "held": 0},
         "would": {"created": 0, "updated": 0, "touched": 0},
     }
 
@@ -697,8 +711,16 @@ def ingest_batch(email: str, body: Any, *, now: Optional[datetime] = None) -> Di
 
     _rate_limit(db, email, batch["postings_submitted"], now)
 
-    response = _process(db, email, batch, mode=mode, now=now)
-    _count_postings(db, email, batch["postings_submitted"], now)
+    written: List[Dict[str, str]] = []
+    response = _process(db, email, batch, mode=mode, now=now, written=written)
+    posted = response["postings"]
+    logger.info(
+        "radar: batch accepted mode=%s boards=%d unknown=%d sent=%d created=%d "
+        "updated=%d touched=%d reopened=%d held=%d aged_out=%d rejected=%d",
+        mode, response["boards"]["accepted"], response["boards"]["unknown"],
+        batch["postings_submitted"], posted["created"], posted["updated"],
+        posted["touched"], posted["reopened"], posted["held"], posted["aged_out"],
+        posted["rejected"])
     try:
         db[BATCHES].update_one(
             {"_id": batch_key},
@@ -710,6 +732,11 @@ def ingest_batch(email: str, body: Any, *, now: Optional[datetime] = None) -> Di
                                                "search_text", "submitted")}
                            for b in batch["boards"]],
                 "response": response,
+                "sent": batch["postings_submitted"],
+                # Which postings this batch wrote or refreshed, and how, so one
+                # account's rows can be found again.
+                "written": written[:LEDGER_MAX_IDS],
+                "written_truncated": len(written) > LEDGER_MAX_IDS,
                 "expire_at": now + timedelta(days=BATCH_KEEP_DAYS),
             }},
             upsert=True)
@@ -719,33 +746,58 @@ def ingest_batch(email: str, body: Any, *, now: Optional[datetime] = None) -> Di
 
 
 def _decide(existing: Optional[Dict[str, Any]], row: Dict[str, Any],
-            has_body: bool) -> str:
-    """What the crawl's triage would do with this row, given what we hold.
+            has_body: bool, guard: Optional[Dict[str, Any]] = None) -> str:
+    """What a browser sighting may do with this row, given what we hold.
 
     `created` (new), `reopened` (held but closed: a live listing is proof it
-    is open), `touched` (held, open, listing proves the content unchanged and
-    the browser brings no better body), `reread` (as touched, but the stored
-    body is owed the current reader), else `updated`."""
+    is open), `held` (closed because its own page said so: left closed),
+    `touched` (held and open: refreshed as still live), `reread` (as touched,
+    but the stored body is owed the current reader), else `updated` (held,
+    open, no fetched body yet, and the browser brings one).
+
+    A batch is untrusted, so this is narrower than the crawl's triage: once a
+    posting has a fetched body, a browser sighting only ever says "still
+    listed". It cannot replace that body or change the row's fields."""
     w = _worker()
     if not existing:
         return "created"
     if existing.get("status") != "active":
+        if str((guard or {}).get("closed_reason") or "") in NO_REOPEN_REASONS:
+            return "held"
         return "reopened"
-    better_body = has_body and existing.get("body_state") != w.BODY_FULL
-    if better_body:
+    if has_body and existing.get("body_state") != w.BODY_FULL:
         return "updated"
-    if w._listing_implies_same_content(existing, row):
-        return "touched"
-    if w._only_reader_is_stale(existing, row):
+    if (not w._listing_implies_same_content(existing, row)
+            and w._only_reader_is_stale(existing, row)):
         return "reread"
-    return "updated"
+    return "touched"
+
+
+def _guard_fields(db, source: str, ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """The stored fields a browser sighting must not change, for held rows."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        try:
+            cursor = db["job_postings"].find(
+                {"source": source, "source_job_id": {"$in": chunk}},
+                {"_id": 0, "source_job_id": 1, "closed_reason": 1, "title_raw": 1,
+                 "canonical_url": 1, "detail_ref": 1})
+            for doc in cursor:
+                out[str(doc.get("source_job_id"))] = doc
+        except Exception as exc:  # pragma: no cover - then nothing is changed
+            logger.warning("radar: guard read failed (%s)", type(exc).__name__)
+            return {i: {"unreadable": True} for i in ids}
+    return out
 
 
 def _process(db, email: str, batch: Dict[str, Any], *, mode: str,
-             now: datetime) -> Dict[str, Any]:
+             now: datetime,
+             written: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
     from services import job_inventory_service as inv
     w = _worker()
 
+    written = written if written is not None else []
     counts = _empty_counts()
     _, by_address = _index_members()
     fresh_cutoff = now - timedelta(days=max(0, int(w.FRESHNESS_BOUNDARY_DAYS)))
@@ -799,6 +851,7 @@ def _process(db, email: str, batch: Dict[str, Any], *, mode: str,
     kept, aged = w._admit_by_age(pairs, existing_by_id, fresh_cutoff=fresh_cutoff)
     counts["postings"]["aged_out"] += aged
     kept_ids = {row["source_job_id"] for _m, row in kept}
+    guards = _guard_fields(db, src, [i for i in order if i in existing_by_id])
 
     touch_ids: List[str] = []
     reread: List[Tuple[Dict[str, Any], str]] = []
@@ -810,8 +863,16 @@ def _process(db, email: str, batch: Dict[str, Any], *, mode: str,
         body = _apply_detail(member, row, job, detail) if detail is not None else ""
         counts["postings"]["accepted"] += 1
         existing = existing_by_id.get(sjid)
-        decision = _decide(existing, row, bool(body))
-        if decision in ("touched", "reread"):
+        guard = guards.get(sjid) or {}
+        if existing and guard.get("unreadable"):
+            # What must be kept could not be read, so nothing is changed.
+            decision = "held"
+        else:
+            decision = _decide(existing, row, bool(body), guard)
+        if decision == "held":
+            counts["postings"]["accepted"] -= 1
+            counts["postings"]["held"] += 1
+        elif decision in ("touched", "reread"):
             counts["would"]["touched"] += 1
             touch_ids.append(sjid)
             if decision == "reread":
@@ -830,6 +891,7 @@ def _process(db, email: str, batch: Dict[str, Any], *, mode: str,
     for start in range(0, len(touch_ids), 500):
         inv.touch_seen(src, touch_ids[start:start + 500], now=now)
     counts["postings"]["touched"] += len(touch_ids)
+    written.extend({"id": i, "did": "touched"} for i in touch_ids)
 
     for member, row, body, decision in writes:
         payload = dict(row)
@@ -837,6 +899,15 @@ def _process(db, email: str, batch: Dict[str, Any], *, mode: str,
         if detail_ref:
             payload["detail_ref"] = detail_ref
         payload.pop("_member_key", None)
+        # A held row keeps its own title, link and detail address: the browser
+        # may add a body or show the posting is listed, nothing else.
+        if existing_by_id.get(row["source_job_id"]):
+            guard = guards.get(row["source_job_id"]) or {}
+            for field, stored in (("title", guard.get("title_raw")),
+                                  ("url", guard.get("canonical_url")),
+                                  ("detail_ref", guard.get("detail_ref"))):
+                if stored:
+                    payload[field] = stored
         if body:
             payload["description"] = body
             payload["body_state"] = w.BODY_FULL
@@ -851,14 +922,24 @@ def _process(db, email: str, batch: Dict[str, Any], *, mode: str,
             logger.warning("radar: write refused for %s (%s)",
                            str(row.get("source_job_id"))[:60], exc)
             continue
+        sjid = row["source_job_id"]
         if outcome.get("created"):
             counts["postings"]["created"] += 1
+            did = "created"
+            try:
+                db["job_postings"].update_one(
+                    {"source": src, "source_job_id": sjid},
+                    {"$set": {"origin": ORIGIN_BROWSER}})
+            except Exception as exc:  # pragma: no cover - a label, not the write
+                logger.warning("radar: origin label failed (%s)", type(exc).__name__)
         elif outcome.get("reopened") or decision == "reopened":
             counts["postings"]["reopened"] += 1
+            did = "reopened"
         else:
             counts["postings"]["updated"] += 1
+            did = "updated"
+        written.append({"id": sjid, "did": did})
 
-        sjid = row["source_job_id"]
         if outcome.get("kept_stored_body"):
             prior = existing_by_id.get(sjid)
             if outcome.get("needs_parse") and prior:
@@ -877,3 +958,98 @@ def _process(db, email: str, batch: Dict[str, Any], *, mode: str,
         w._reread_stored(src, reread, deadline=time.monotonic() + 15.0, stop=None,
                          counts=collections.Counter(), now=now)
     return {"batch_id": batch["batch_id"], "mode": mode, **counts}
+
+
+# ---------------------------------------------------------------------------
+# What was received (the extension's own line, and Admin)
+# ---------------------------------------------------------------------------
+
+_SUM_FIELDS = ("created", "updated", "touched", "reopened", "held", "aged_out", "rejected")
+
+
+def _iso(value: Any) -> Optional[str]:
+    value = _aware(value)
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z") if value else None
+
+
+def _upload_groups(db, match: Dict[str, Any], group_id: Any) -> List[Dict[str, Any]]:
+    group: Dict[str, Any] = {
+        "_id": group_id, "batches": {"$sum": 1},
+        "sent": {"$sum": {"$ifNull": ["$sent", {"$sum": "$boards.submitted"}]}},
+        "boards": {"$sum": "$response.boards.accepted"},
+        "unknown_boards": {"$sum": "$response.boards.unknown"},
+        "last_at": {"$max": "$received_at"},
+    }
+    for field in _SUM_FIELDS:
+        group[field] = {"$sum": {"$ifNull": [f"$response.postings.{field}", 0]}}
+    return list(db[BATCHES].aggregate([{"$match": match}, {"$group": group}],
+                                      maxTimeMS=15000))
+
+
+def _upload_row(doc: Dict[str, Any]) -> Dict[str, Any]:
+    row = {"batches": int(doc.get("batches") or 0), "sent": int(doc.get("sent") or 0),
+           "boards": int(doc.get("boards") or 0),
+           "unknown_boards": int(doc.get("unknown_boards") or 0),
+           "last_at": _iso(doc.get("last_at"))}
+    for field in _SUM_FIELDS:
+        row[field] = int(doc.get(field) or 0)
+    # What reached the shared list: written new, given a body, or kept alive.
+    row["recorded"] = row["created"] + row["updated"] + row["touched"] + row["reopened"]
+    return row
+
+
+def uploads_today(email: str, *, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """This account's own received batches for the current UTC day.
+
+    `available: false` means the count could not be read, which is not zero."""
+    now = now or _utcnow()
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        docs = _upload_groups(_db(), {"user_email": email, "mode": MODE_ON,
+                                      "received_at": {"$gte": start}}, None)
+    except Exception as exc:
+        logger.warning("radar: uploads read failed (%s)", type(exc).__name__)
+        return {"available": False, "day": start.strftime("%Y-%m-%d")}
+    row = _upload_row(docs[0] if docs else {})
+    return {"available": True, "day": start.strftime("%Y-%m-%d"), **row}
+
+
+def uploads_summary(days: int = 7, *, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Admin: received batches per account and UTC day, newest first, plus the
+    boards the registry does not know. Batch rows live 30 days."""
+    now = now or _utcnow()
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = 7
+    days = max(1, min(BATCH_KEEP_DAYS, days))
+    start = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    out: Dict[str, Any] = {"generated_at": _iso(now), "days": days,
+                           "contributor_scope": contributor_scope(),
+                           "ingest_mode": ingest_mode(), "enabled": enabled()}
+    try:
+        db = _db()
+        docs = _upload_groups(
+            db, {"received_at": {"$gte": start}},
+            {"email": "$user_email", "mode": "$mode",
+             "day": {"$dateToString": {"format": "%Y-%m-%d", "date": "$received_at"}}})
+        rows = []
+        for doc in docs:
+            key = doc.get("_id") or {}
+            rows.append({"email": key.get("email"), "mode": key.get("mode"),
+                         "day": key.get("day"), **_upload_row(doc)})
+        rows.sort(key=lambda r: (r["day"] or "", r["last_at"] or ""), reverse=True)
+        unknown = [
+            {"tenant": d.get("tenant"), "site": d.get("site"), "wd_host": d.get("wd_host"),
+             "domain": d.get("domain"), "sightings": int(d.get("sightings") or 0),
+             "postings": int(d.get("postings") or 0),
+             "reporters": len(d.get("reported_by") or []),
+             "last_seen_at": _iso(d.get("last_seen_at"))}
+            for d in db[UNKNOWN_BOARDS].find({}).sort("sightings", -1).limit(25)]
+    except Exception as exc:
+        logger.warning("radar: uploads summary failed (%s)", type(exc).__name__)
+        out["available"] = False
+        return out
+    out.update({"available": True, "rows": rows, "unknown_boards": unknown,
+                "accounts": len({r["email"] for r in rows})})
+    return out

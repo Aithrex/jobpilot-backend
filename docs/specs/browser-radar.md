@@ -50,9 +50,20 @@ source. It covers a sliver of the outage (see "Size" below), not all of it.
   `body_state: full`. Anything else → write (a teaser write never erases a
   stored body; `upsert_posting` guards that). Requirements are read the way
   the crawl reads them (parse reuse, then `_persist_requirements`).
-- **On by default, for contributors only.** `BROWSER_RADAR_INGEST` unset is
-  `on`. Writes are limited to trusted accounts by the contributor gate
-  (admins + `BROWSER_RADAR_CONTRIBUTORS`), not by the mode. `dry_run` (set by
+- **A batch is untrusted (2026-11-27).** Every signed-in account may send, so
+  the rules are in the write path, not in who sent it. A browser sighting:
+  - never replaces a body we already fetched, and never changes a held
+    posting's title, link or detail address (it may add a body to a teaser,
+    or show the posting is still listed);
+  - never reopens a posting closed as `detail-gone` or `link-dead` (its own
+    page said so); it is counted as `held`;
+  - is listed on its batch row (`written`: posting id and what was done), and
+    a posting first written by a browser carries `origin: "browser"`, so one
+    account's rows can be found and removed;
+  - spends the daily posting limit atomically, and a refused batch spends
+    nothing.
+- **On by default.** `BROWSER_RADAR_INGEST` unset is `on`. Who may send is
+  `BROWSER_RADAR_CONTRIBUTORS_SCOPE` (see Ops), not the mode. `dry_run` (set by
   env) validates, maps, triages and records a batch and says what `on` would
   do under `would`, writing nothing to `job_postings`; `off` refuses batches.
   A value that is none of the three reads as `dry_run`.
@@ -67,7 +78,7 @@ JWT. Read-only. `?limit=` boards (default 40, max 80).
 | --- | --- |
 | `enabled` | `BROWSER_RADAR_ENABLED`. When false, no tasks and no terms. |
 | `ingest_mode` | `off`, `dry_run` or `on` (`BROWSER_RADAR_INGEST`; unset is `on`, an unknown value reads as `dry_run`). |
-| `contributor` | Whether `POST …/listings` accepts this account: `users.is_admin`, the admin set, or `BROWSER_RADAR_CONTRIBUTORS`. |
+| `contributor` | Whether `POST …/listings` accepts this account. Every signed-in account by default; with `BROWSER_RADAR_CONTRIBUTORS_SCOPE=listed`, only `users.is_admin`, the admin set, or `BROWSER_RADAR_CONTRIBUTORS`. |
 | `search_terms` | The user's board titles as phrases (`inventory_feed.title_phrases` over `board_requests[email].params.titles`), at most 5. |
 | `limits` | 40 requests a run, 300 a day, 6,000 ms apart, 15 details a run. The extension clamps these to its own lower hard caps. |
 | `tasks` | Ordered. `relevant`: a tenant on the user's own For-you Workday cards (`board_snapshots[email\|workday]`, most cards first), one task per search term (at most 2). `stale`, for contributors only: the crawler's newest sighting of the tenant's open postings is over 12 hours old, largest boards first, termless (`search_text: ""`, newest first). `both`: relevant and stale, listed first. |
@@ -90,7 +101,7 @@ a dead session):
 | Status | `error` | When |
 | --- | --- | --- |
 | 409 | `ingest_off` | `BROWSER_RADAR_INGEST=off` or `BROWSER_RADAR_ENABLED=0` |
-| 403 | `not_contributor` | not an admin and not listed |
+| 403 | `not_contributor` | scope is `listed` and the account is not an admin and not listed |
 | 400 | `invalid_batch` | shape or bounds |
 | 429 | `rate_limited` | 30 batches in the clock hour, or 5,000 postings in the UTC day; `retry_after_seconds` and `Retry-After` say when |
 
@@ -99,8 +110,28 @@ writes nothing (checked before the rate limit, so a retry costs no quota).
 
 Response (contract section 2): `mode`, `boards.{accepted, unknown}`,
 `postings.{accepted, rejected, created, updated, touched, reopened,
-aged_out}`, and `would.{created, updated, touched}` (what the triage decided;
-in `dry_run` only `would` moves).
+aged_out, held}`, and `would.{created, updated, touched}` (what the triage
+decided; in `dry_run` only `would` moves).
+
+### `GET /api/jobs/browser-radar/uploads/today`
+
+JWT. Read-only. What the server received from this account in the current UTC
+day, from `browser_radar_batches` (written batches only, never dry runs):
+`available`, `day`, `batches`, `sent`, `created`, `updated`, `touched`,
+`reopened`, `held`, `aged_out`, `rejected`, `boards`, `unknown_boards`,
+`last_at`, and `recorded` (created + updated + touched + reopened: what
+reached the shared list). `available: false` means the count could not be
+read; it is not zero. The extension's "Sent N jobs to Aspirely today" line
+reads `recorded`.
+
+### `GET /api/admin/ops/browser-radar`
+
+Admin. `?days=` 1 to 30 (default 7). The same totals per account, mode and UTC
+day, newest first, plus the 25 most-seen unknown boards (reporter count only,
+no emails) and the current `contributor_scope`, `ingest_mode` and `enabled`.
+A refused batch leaves no row; it is one log line
+(`radar: batch refused code=... status=...`), and an accepted batch is one
+log line with its counts.
 
 ## Collections
 
