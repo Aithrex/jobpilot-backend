@@ -1173,6 +1173,30 @@ INDEX_SPECS = [
                                     ("checked_at", DESCENDING)],
      {"name": "url_check_outcome_idx"}),
 
+    # === Browser Radar (docs/specs/browser-radar.md) ======================
+    # Mirrors `browser_radar_service.INDEX_SPECS` (a test holds the two
+    # equal). TTL on the batch rows, the per-account counters, the fleet's
+    # hourly counters and the coverage snapshots.
+    ("browser_radar_batches", [("expire_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expire_at"}),
+    ("browser_radar_usage", [("expire_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expire_at"}),
+    # The claim (`radar-2`): boards in the registry that are due, oldest
+    # first, `rank` ordering boards equally due, `parked_until` read from the
+    # key. One guarded find_one_and_update per board walks this from the top.
+    ("browser_radar_board_leases", [("in_registry", ASCENDING), ("due_at", ASCENDING),
+                                    ("rank", ASCENDING), ("parked_until", ASCENDING)],
+     {"name": "radar_board_due"}),
+    # A release finds its board by the lease id. Sparse: a free board has none.
+    ("browser_radar_board_leases", [("lease.id", ASCENDING)],
+     {"name": "radar_board_lease_id", "sparse": True}),
+    ("browser_radar_coverage_snapshots", [("measured_at", DESCENDING)],
+     {"name": "radar_coverage_recent"}),
+    ("browser_radar_coverage_snapshots", [("expire_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expire_at"}),
+    ("browser_radar_fleet", [("expire_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expire_at"}),
+
 ]
 
 # Indexes DROPPED by this migration (Guest Onboarding v2: plaintext identity

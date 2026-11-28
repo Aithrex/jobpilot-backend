@@ -41,8 +41,10 @@ CATCH_UP_SECONDS = 600
 # gmail_sync reads new mail for connected users whose last finished scan is
 # GMAIL_AUTO_SYNC_HOURS (6) old, and continues any scan a deploy interrupted
 # (gmail_service.sync_due). The 30-minute tick only bounds how late.
+# radar_coverage brings the Browser Radar board ledger in line with the Workday
+# registry and stores one coverage snapshot (browser_radar_fleet.run_coverage).
 EVERY = {"digest_hourly": 60, "learning_due": 10, "board_refresh": 10,
-         "logo_refresh": 15, "gmail_sync": 30}
+         "logo_refresh": 15, "gmail_sync": 30, "radar_coverage": 30}
 DAILY = {
     "bandit_nightly": (3, 0),
     "trend_aggregate": (4, 0),

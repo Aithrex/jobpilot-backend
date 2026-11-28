@@ -352,6 +352,13 @@ def dispatch_scheduled(name: str) -> Dict[str, Any]:
             # only, so a status moved only when the user remembered to press.
             from services import gmail_service
             return {"job": name, "result": gmail_service.sync_due(budget_seconds=600)}
+        if name == "radar_coverage":
+            # Inline on the scheduler thread, inside a budget well under the
+            # 30-minute tick. It syncs the Browser Radar board ledger from the
+            # Workday registry and stores one coverage snapshot. Mongo only:
+            # no request to Workday and none to the crawler.
+            from services import browser_radar_fleet
+            return {"job": name, "result": browser_radar_fleet.run_coverage(budget_seconds=240)}
         if name == "bandit_nightly":
             return {"job": name, "result": run_bandit_nightly()}
         if name == "learning_due":

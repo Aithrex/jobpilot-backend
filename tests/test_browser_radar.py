@@ -24,6 +24,7 @@ from services import job_inventory_service as inv
 
 CONTRIB = "contrib@example.com"
 OTHER = "someone@example.com"
+SECOND = "second@example.com"
 NOW = datetime.now(timezone.utc)
 
 BODY_HTML = ("<p>Requirements: 3+ years of Python and AWS. Bachelor's degree in Computer "
@@ -48,7 +49,7 @@ def db(monkeypatch):
     radar.reset_stats_cache()
     monkeypatch.setattr(w, "registry_members",
                         lambda source: list(MEMBERS) if w.normalize_source(source) == w.SOURCE_WORKDAY else [])
-    monkeypatch.setenv("BROWSER_RADAR_CONTRIBUTORS", CONTRIB)
+    monkeypatch.setenv("BROWSER_RADAR_CONTRIBUTORS", f"{CONTRIB},{SECOND}")
     # These tests cover the `listed` gate; the default (`all`) is tested below.
     monkeypatch.setenv("BROWSER_RADAR_CONTRIBUTORS_SCOPE", "listed")
     monkeypatch.delenv("BROWSER_RADAR_INGEST", raising=False)
@@ -469,3 +470,113 @@ class TestEveryAccountByDefault:
         assert radar.is_contributor(OTHER) is False
         monkeypatch.setenv("BROWSER_RADAR_CONTRIBUTORS_SCOPE", "typo")
         assert radar.is_contributor(OTHER) is False
+
+
+# ---------------------------------------------------------------------------
+# A batch is untrusted: what a browser sighting may not do
+# ---------------------------------------------------------------------------
+
+class TestGuards:
+    def _seed_full(self, db):
+        p1 = _posting("JR1")
+        radar.ingest_batch(CONTRIB, _batch([p1], details=[_detail(p1)]), now=NOW)
+        return p1, inv.get_posting("workday", _sjid("JR1"))
+
+    def test_a_fetched_body_is_never_replaced(self, db):
+        p1, first = self._seed_full(db)
+        forged = dict(p1, title="Senior Backend Engineer (pay a fee to apply)",
+                      locationsText="Remote")
+        scam = _detail(forged, body="<p>Contact recruiter@evil.example to pay the fee.</p>" * 40)
+        out = radar.ingest_batch(SECOND, _batch([forged], details=[scam]),
+                                 now=NOW + timedelta(hours=1))
+        assert out["postings"]["updated"] == 0 and out["postings"]["touched"] == 1
+        after = inv.get_posting("workday", _sjid("JR1"))
+        assert after["content_hash"] == first["content_hash"]
+        assert after["title_raw"] == first["title_raw"]
+        assert after["locations"] == first["locations"]
+
+    def test_a_held_teaser_keeps_its_title_link_and_detail_address(self, db):
+        p1 = _posting("JR1")
+        radar.ingest_batch(CONTRIB, _batch([p1]), now=NOW)
+        first = inv.get_posting("workday", _sjid("JR1"))
+        moved = dict(p1, title="Something Else Entirely",
+                     externalPath="/job/Elsewhere/Another-Job_JR9999")
+        out = radar.ingest_batch(SECOND, _batch([moved], details=[_detail(moved)]),
+                                 now=NOW + timedelta(hours=1))
+        assert out["postings"]["updated"] == 1
+        after = inv.get_posting("workday", _sjid("JR1"))
+        assert after["body_state"] == "full"
+        assert after["title_raw"] == first["title_raw"]
+        assert after["canonical_url"] == first["canonical_url"]
+        assert after.get("detail_ref") == first.get("detail_ref")
+
+    @pytest.mark.parametrize("reason", ["detail-gone", "link-dead"])
+    def test_a_posting_its_own_page_closed_stays_closed(self, db, reason):
+        p1, _ = self._seed_full(db)
+        assert inv.close_posting("workday", _sjid("JR1"), reason=reason, now=NOW)
+        out = radar.ingest_batch(SECOND, _batch([p1], details=[_detail(p1)]))
+        assert out["postings"]["held"] == 1
+        assert out["postings"]["reopened"] == out["postings"]["accepted"] == 0
+        assert inv.get_posting("workday", _sjid("JR1"))["status"] != "active"
+
+    def test_the_batch_row_lists_what_it_wrote(self, db):
+        p1, p2 = _posting("JR1"), _posting("JR2", title="Data Engineer")
+        radar.ingest_batch(CONTRIB, _batch([p1]), now=NOW)
+        radar.ingest_batch(CONTRIB, _batch([p1, p2], batch_id="ledger-batch-01"),
+                           now=NOW + timedelta(hours=1))
+        row = db[radar.BATCHES].find_one({"batch_id": "ledger-batch-01"})
+        assert sorted((e["id"], e["did"]) for e in row["written"]) == [
+            (_sjid("JR1"), "touched"), (_sjid("JR2"), "created")]
+        assert row["sent"] == 2 and row["written_truncated"] is False
+
+    def test_a_browser_created_posting_says_so(self, db):
+        radar.ingest_batch(CONTRIB, _batch([_posting("JR1")]))
+        assert inv.get_posting("workday", _sjid("JR1"))["origin"] == "browser"
+
+    def test_a_refused_day_limit_costs_no_quota(self, db, monkeypatch):
+        monkeypatch.setattr(radar, "POSTINGS_PER_DAY", 2)
+        radar.ingest_batch(CONTRIB, _batch([_posting("A1"), _posting("A2")]))
+        for _ in range(3):
+            with pytest.raises(radar.RadarError):
+                radar.ingest_batch(CONTRIB, _batch([_posting("A3")]))
+        usage = db[radar.USAGE].find_one({"_id": {"$regex": r"\|d\|"}})
+        assert usage["postings"] == 2
+
+
+class TestUploadsRead:
+    def test_today_is_this_accounts_own_count(self, db, app):
+        p1, p2 = _posting("JR1"), _posting("JR2", title="Data Engineer")
+        radar.ingest_batch(CONTRIB, _batch([p1, p2]))
+        radar.ingest_batch(CONTRIB, _batch([p1]))
+        r = _call(app, CONTRIB, "get", "/api/jobs/browser-radar/uploads/today")
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body["available"] is True
+        assert (body["batches"], body["sent"], body["created"], body["touched"]) == (2, 3, 2, 1)
+        assert body["recorded"] == 3 and body["last_at"]
+        other = _call(app, OTHER, "get", "/api/jobs/browser-radar/uploads/today").get_json()
+        assert other["available"] is True and other["batches"] == 0 and other["recorded"] == 0
+
+    def test_dry_runs_are_not_counted_as_sent(self, db, monkeypatch):
+        monkeypatch.setenv("BROWSER_RADAR_INGEST", "dry_run")
+        radar.ingest_batch(CONTRIB, _batch([_posting("JR1")]))
+        assert radar.uploads_today(CONTRIB)["batches"] == 0
+
+    def test_an_unreadable_count_is_unknown_not_zero(self, db, monkeypatch):
+        def boom():
+            raise RuntimeError("down")
+        monkeypatch.setattr(radar, "_db", boom)
+        out = radar.uploads_today(CONTRIB)
+        assert out["available"] is False and "batches" not in out
+
+    def test_admin_summary_groups_by_account_and_day(self, db):
+        radar.ingest_batch(CONTRIB, _batch([_posting("JR1")]))
+        radar.ingest_batch(CONTRIB, _batch([_posting("JR2")], tenant="zzz"))
+        out = radar.uploads_summary(7)
+        assert out["available"] is True and out["accounts"] == 1
+        row = out["rows"][0]
+        assert row["email"] == CONTRIB and row["batches"] == 2 and row["created"] == 1
+        assert row["unknown_boards"] == 1
+        assert out["unknown_boards"][0]["tenant"] == "zzz"
+        assert out["unknown_boards"][0]["reporters"] == 1
+        assert "reported_by" not in out["unknown_boards"][0]
